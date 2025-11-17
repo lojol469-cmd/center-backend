@@ -11,6 +11,15 @@ const path = require('path');
 const fs = require('fs');
 const os = require('os');
 const { WebSocketServer } = require('ws');
+const { 
+  uploadCloudinary, 
+  publicationUpload, 
+  storyUpload, 
+  commentUpload, 
+  markerUpload, 
+  employeeUpload, 
+  deleteFromCloudinary 
+} = require('./cloudynary');
 
 const app = express();
 
