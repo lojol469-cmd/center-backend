@@ -173,39 +173,14 @@ app.use(cors({
 
 app.use(express.json());
 
-// Servir les fichiers statiques (uploads)
+// Servir les fichiers statiques (uploads) - Backup local uniquement
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 // ========================================
-// CONFIGURATION MULTER - UPLOAD D'IMAGES
+// CONFIGURATION CLOUDINARY - PRIORITAIRE
 // ========================================
-
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, 'uploads/'),
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
-    cb(null, 'profile-' + uniqueSuffix + path.extname(file.originalname));
-  }
-});
-
-const upload = multer({
-  storage,
-  limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
-  fileFilter: (req, file, cb) => {
-    const allowedMimes = [
-      'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
-      'image/webp', 'image/bmp', 'image/tiff', 'image/svg+xml'
-    ];
-    const allowedExtensions = ['.jpg', '.jpeg', '.png', '.gif', '.webp', '.bmp', '.tiff', '.svg'];
-    const ext = path.extname(file.originalname).toLowerCase();
-
-    if (allowedMimes.includes(file.mimetype) || allowedExtensions.includes(ext)) {
-      cb(null, true);
-    } else {
-      cb(new Error('Format image non supporté'), false);
-    }
-  }
-});
+// Les uploads utilisent maintenant Cloudinary (voir cloudynary.js)
+// uploadCloudinary, publicationUpload, storyUpload, etc. sont déjà importés
 
 // ========================================
 // CONNEXION À MONGODB
@@ -226,6 +201,7 @@ const userSchema = new mongoose.Schema({
   name: { type: String, default: '' },
   password: { type: String, required: true },
   profileImage: { type: String, default: '' },
+  cloudinaryPublicId: { type: String, default: '' }, // Pour supprimer l'image de Cloudinary
   isVerified: { type: Boolean, default: false },
   status: { type: String, enum: ['active', 'blocked', 'admin'], default: 'active' },
   otp: { type: String },
@@ -1387,9 +1363,8 @@ app.put('/api/user/change-password', verifyToken, async (req, res) => {
   }
 });
 
-app.post('/api/user/upload-profile-image', verifyToken, upload.single('profileImage'), async (req, res) => {
-  console.log('\n=== UPLOAD PROFILE IMAGE ===');
-  console.log('Headers:', req.headers);
+app.post('/api/user/upload-profile-image', verifyToken, uploadCloudinary.single('profileImage'), async (req, res) => {
+  console.log('\n=== UPLOAD PROFILE IMAGE (Cloudinary) ===');
   console.log('File:', req.file);
   console.log('User ID:', req.user?.userId);
   
@@ -1398,13 +1373,18 @@ app.post('/api/user/upload-profile-image', verifyToken, upload.single('profileIm
     if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé' });
     if (!req.file) return res.status(400).json({ message: 'Image requise' });
 
-    // Supprimer l'ancienne image si elle existe
-    if (user.profileImage) {
-      const oldPath = path.join(__dirname, user.profileImage.replace(`${BASE_URL}/`, ''));
-      if (fs.existsSync(oldPath)) fs.unlinkSync(oldPath);
+    // Supprimer l'ancienne image de Cloudinary si elle existe
+    if (user.profileImage && user.cloudinaryPublicId) {
+      try {
+        await deleteFromCloudinary(user.cloudinaryPublicId);
+      } catch (err) {
+        console.log('⚠️ Impossible de supprimer l\'ancienne image:', err.message);
+      }
     }
 
-    user.profileImage = `${BASE_URL}/${req.file.path.replace(/\\/g, '/')}`;
+    // Enregistrer la nouvelle URL Cloudinary
+    user.profileImage = req.file.path; // URL Cloudinary
+    user.cloudinaryPublicId = req.file.filename; // Public ID pour suppression future
     await user.save();
 
     const userWithUrl = {
@@ -1416,7 +1396,7 @@ app.post('/api/user/upload-profile-image', verifyToken, upload.single('profileIm
       createdAt: user.createdAt
     };
 
-    console.log('✅ Photo mise à jour:', userWithUrl.profileImage);
+    console.log('✅ Photo mise à jour (Cloudinary):', userWithUrl.profileImage);
     res.json({
       message: 'Photo mise à jour',
       user: userWithUrl
