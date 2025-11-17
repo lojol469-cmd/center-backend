@@ -230,7 +230,9 @@ const employeeSchema = new mongoose.Schema({
   role: { type: String, default: '' },
   department: { type: String, default: 'IT' },
   faceImage: { type: String, default: '' },
+  faceImagePublicId: { type: String },
   certificate: { type: String, default: '' },
+  certificatePublicId: { type: String },
   startDate: { type: Date },
   endDate: { type: Date },
   certificateStartDate: { type: Date },
@@ -285,7 +287,8 @@ const publicationSchema = new mongoose.Schema({
   media: [{
     type: { type: String, enum: ['image', 'video'], required: true },
     url: { type: String, required: true },
-    filename: { type: String, required: true }
+    filename: { type: String, required: true },
+    cloudinaryPublicId: { type: String }
   }],
   location: {
     latitude: { type: Number },
@@ -304,7 +307,8 @@ const publicationSchema = new mongoose.Schema({
       type: { type: String, enum: ['image', 'video', 'audio'], required: true },
       url: { type: String, required: true },
       filename: { type: String, required: true },
-      duration: { type: Number } // Pour audio/vidéo
+      duration: { type: Number }, // Pour audio/vidéo
+      cloudinaryPublicId: { type: String }
     }],
     replyTo: { type: mongoose.Schema.Types.ObjectId }, // ID du commentaire parent (pour réponses)
     likes: [{ type: mongoose.Schema.Types.ObjectId, ref: 'User' }],
@@ -334,8 +338,14 @@ const markerSchema = new mongoose.Schema({
   title: { type: String, required: true },
   comment: { type: String, default: '' },
   color: { type: String, default: '#FF0000' },
-  photos: [{ type: String }], // URLs des photos
-  videos: [{ type: String }], // URLs des vidéos
+  photos: [{ 
+    url: { type: String },
+    cloudinaryPublicId: { type: String }
+  }],
+  videos: [{ 
+    url: { type: String },
+    cloudinaryPublicId: { type: String }
+  }],
   createdAt: { type: Date, default: Date.now },
   updatedAt: { type: Date, default: Date.now }
 });
@@ -345,7 +355,8 @@ const Marker = mongoose.model('Marker', markerSchema);
 const storySchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
   content: { type: String, default: '' }, // Texte de la story
-  mediaUrl: { type: String, default: '' }, // URL de l'image/vidéo
+  mediaUrl: { type: String, default: '' }, // URL de l'image/vidéo (Cloudinary)
+  cloudinaryPublicId: { type: String, default: '' }, // Public ID Cloudinary pour suppression
   mediaType: { type: String, enum: ['image', 'video', 'text'], default: 'text' },
   backgroundColor: { type: String, default: '#00D4FF' }, // Couleur de fond pour stories texte
   duration: { type: Number, default: 5 }, // Durée d'affichage en secondes
@@ -1280,10 +1291,15 @@ app.delete('/api/user/delete-profile-image', verifyToken, async (req, res) => {
     const user = await User.findById(req.user.userId);
     if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé' });
 
-    if (user.profileImage) {
-      const imagePath = path.join(__dirname, user.profileImage.replace(`${BASE_URL}/`, ''));
-      if (fs.existsSync(imagePath)) fs.unlinkSync(imagePath);
+    if (user.cloudinaryPublicId) {
+      try {
+        await deleteFromCloudinary(user.cloudinaryPublicId);
+        console.log('✅ Photo de profil supprimée de Cloudinary:', user.cloudinaryPublicId);
+      } catch (err) {
+        console.log('⚠️ Erreur suppression photo:', err.message);
+      }
       user.profileImage = '';
+      user.cloudinaryPublicId = undefined;
       await user.save();
     }
 
@@ -1330,14 +1346,15 @@ app.post('/api/publications', verifyToken, publicationUpload.array('media', 10),
 
   const media = req.files?.map(file => ({
     type: file.mimetype.startsWith('image/') ? 'image' : 'video',
-    url: `${BASE_URL}/${file.path.replace(/\\/g, '/')}`,
-    filename: file.filename
+    url: file.path,
+    filename: file.filename,
+    cloudinaryPublicId: file.filename
   })) || [];
 
   const location = latitude && longitude ? { latitude: +latitude, longitude: +longitude, address, placeName } : undefined;
   const tagsArray = tags ? tags.split(',').map(t => t.trim()).filter(Boolean) : [];
 
-  console.log('Médias:', media.length);
+  console.log('Médias (Cloudinary):', media.length);
   console.log('Localisation:', location ? 'Oui' : 'Non');
   console.log('Tags:', tagsArray.length);
 
@@ -1355,7 +1372,7 @@ app.post('/api/publications', verifyToken, publicationUpload.array('media', 10),
   await pub.save();
   await pub.populate('userId', 'name email profileImage');
 
-  console.log('✅ Publication créée, ID:', pub._id);
+  console.log('✅ Publication créée (Cloudinary), ID:', pub._id);
   
   const pubObj = pub.toObject();
   
@@ -1670,10 +1687,17 @@ app.delete('/api/publications/:id', verifyToken, async (req, res) => {
   const pub = await Publication.findById(req.params.id);
   if (!pub || pub.userId.toString() !== req.user.userId) return res.status(403).json({ message: 'Accès refusé' });
 
-  pub.media.forEach(m => {
-    const filePath = path.join(__dirname, 'uploads/publications/', m.filename);
-    if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
-  });
+  // Supprimer les médias de Cloudinary
+  for (const media of pub.media) {
+    if (media.cloudinaryPublicId) {
+      try {
+        await deleteFromCloudinary(media.cloudinaryPublicId);
+        console.log('✅ Média supprimé de Cloudinary:', media.cloudinaryPublicId);
+      } catch (err) {
+        console.log('⚠️ Erreur suppression Cloudinary:', err.message);
+      }
+    }
+  }
 
   pub.isActive = false;
   await pub.save();
@@ -1840,7 +1864,7 @@ app.post('/api/publications/:id/comments', verifyToken, commentUpload.array('med
       isEdited: false
     };
 
-    // Ajouter les médias si présents
+    // Ajouter les médias si présents (Cloudinary)
     if (req.files && req.files.length > 0) {
       newComment.media = req.files.map(file => {
         let mediaType = 'image';
@@ -1849,8 +1873,9 @@ app.post('/api/publications/:id/comments', verifyToken, commentUpload.array('med
 
         return {
           type: mediaType,
-          url: `${BASE_URL}/${file.path.replace(/\\/g, '/')}`,
+          url: file.path,
           filename: file.filename,
+          cloudinaryPublicId: file.filename,
           duration: null
         };
       });
@@ -2040,14 +2065,18 @@ app.delete('/api/publications/:pubId/comments/:commentId', verifyToken, async (r
       return res.status(403).json({ message: 'Accès refusé' });
     }
 
-    // Supprimer les fichiers médias
+    // Supprimer les fichiers médias de Cloudinary
     if (comment.media && comment.media.length > 0) {
-      comment.media.forEach(m => {
-        const filePath = path.join(__dirname, m.url);
-        if (fs.existsSync(filePath)) {
-          fs.unlinkSync(filePath);
+      for (const m of comment.media) {
+        if (m.cloudinaryPublicId) {
+          try {
+            await deleteFromCloudinary(m.cloudinaryPublicId);
+            console.log('✅ Média commentaire supprimé de Cloudinary:', m.cloudinaryPublicId);
+          } catch (err) {
+            console.log('⚠️ Erreur suppression média:', err.message);
+          }
         }
-      });
+      }
     }
 
     // Supprimer le commentaire du tableau
@@ -2142,8 +2171,15 @@ app.delete('/api/publications/:id/media/:mediaIndex', verifyToken, async (req, r
   const idx = +req.params.mediaIndex;
   if (idx < 0 || idx >= pub.media.length) return res.status(400).json({ message: 'Index invalide' });
 
-  const filePath = path.join(__dirname, 'uploads/publications/', pub.media[idx].filename);
-  if (fs.existsSync(filePath)) fs.unlinkSync(filePath);
+  // Supprimer de Cloudinary
+  if (pub.media[idx].cloudinaryPublicId) {
+    try {
+      await deleteFromCloudinary(pub.media[idx].cloudinaryPublicId);
+      console.log('✅ Média supprimé de Cloudinary:', pub.media[idx].cloudinaryPublicId);
+    } catch (err) {
+      console.log('⚠️ Erreur suppression Cloudinary:', err.message);
+    }
+  }
 
   pub.media.splice(idx, 1);
   pub.updatedAt = new Date();
@@ -2176,13 +2212,15 @@ app.post('/api/markers', verifyToken, markerUpload.fields([
   }
 
   try {
-    const photos = req.files?.photos?.map(file => 
-      `${BASE_URL}/${file.path.replace(/\\/g, '/')}`
-    ) || [];
+    const photos = req.files?.photos?.map(file => ({
+      url: file.path,
+      cloudinaryPublicId: file.filename
+    })) || [];
     
-    const videos = req.files?.videos?.map(file => 
-      `${BASE_URL}/${file.path.replace(/\\/g, '/')}`
-    ) || [];
+    const videos = req.files?.videos?.map(file => ({
+      url: file.path,
+      cloudinaryPublicId: file.filename
+    })) || [];
 
     const marker = new Marker({
       userId: req.user.userId,
@@ -2198,7 +2236,7 @@ app.post('/api/markers', verifyToken, markerUpload.fields([
     await marker.save();
     await marker.populate('userId', 'name email');
 
-    console.log('✅ Marqueur créé, ID:', marker._id);
+    console.log('✅ Marqueur créé (Cloudinary), ID:', marker._id);
     res.status(201).json({ message: 'Marqueur créé', marker });
   } catch (err) {
     console.error('❌ Erreur création marqueur:', err);
@@ -2292,18 +2330,20 @@ app.put('/api/markers/:id', verifyToken, markerUpload.fields([
     if (comment !== undefined) marker.comment = comment.trim();
     if (color !== undefined) marker.color = color;
 
-    // Ajouter de nouveaux fichiers si fournis
+    // Ajouter de nouveaux fichiers si fournis (Cloudinary)
     if (req.files?.photos?.length) {
-      const newPhotos = req.files.photos.map(file => 
-        `${BASE_URL}/${file.path.replace(/\\/g, '/')}`
-      );
+      const newPhotos = req.files.photos.map(file => ({
+        url: file.path,
+        cloudinaryPublicId: file.filename
+      }));
       marker.photos.push(...newPhotos);
     }
 
     if (req.files?.videos?.length) {
-      const newVideos = req.files.videos.map(file => 
-        `${BASE_URL}/${file.path.replace(/\\/g, '/')}`
-      );
+      const newVideos = req.files.videos.map(file => ({
+        url: file.path,
+        cloudinaryPublicId: file.filename
+      }));
       marker.videos.push(...newVideos);
     }
 
@@ -2311,7 +2351,7 @@ app.put('/api/markers/:id', verifyToken, markerUpload.fields([
     await marker.save();
     await marker.populate('userId', 'name email');
 
-    console.log('✅ Marqueur mis à jour');
+    console.log('✅ Marqueur mis à jour (Cloudinary)');
     res.json({ message: 'Marqueur mis à jour', marker });
   } catch (err) {
     console.error('❌ Erreur mise à jour marqueur:', err);
@@ -2337,32 +2377,29 @@ app.delete('/api/markers/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Accès refusé' });
     }
 
-    // Supprimer les fichiers associés
-    marker.photos.forEach(photoUrl => {
-      try {
-        const photoPath = photoUrl.replace(`${BASE_URL}/`, '');
-        const fullPath = path.join(__dirname, photoPath);
-        if (fs.existsSync(fullPath)) {
-          fs.unlinkSync(fullPath);
-          console.log('Photo supprimée:', fullPath);
+    // Supprimer les photos de Cloudinary
+    for (const photo of marker.photos) {
+      if (photo.cloudinaryPublicId) {
+        try {
+          await deleteFromCloudinary(photo.cloudinaryPublicId);
+          console.log('✅ Photo supprimée de Cloudinary:', photo.cloudinaryPublicId);
+        } catch (err) {
+          console.error('⚠️ Erreur suppression photo:', err.message);
         }
-      } catch (err) {
-        console.error('Erreur suppression photo:', err);
       }
-    });
+    }
 
-    marker.videos.forEach(videoUrl => {
-      try {
-        const videoPath = videoUrl.replace(`${BASE_URL}/`, '');
-        const fullPath = path.join(__dirname, videoPath);
-        if (fs.existsSync(fullPath)) {
-          fs.unlinkSync(fullPath);
-          console.log('Vidéo supprimée:', fullPath);
+    // Supprimer les vidéos de Cloudinary
+    for (const video of marker.videos) {
+      if (video.cloudinaryPublicId) {
+        try {
+          await deleteFromCloudinary(video.cloudinaryPublicId);
+          console.log('✅ Vidéo supprimée de Cloudinary:', video.cloudinaryPublicId);
+        } catch (err) {
+          console.error('⚠️ Erreur suppression vidéo:', err.message);
         }
-      } catch (err) {
-        console.error('Erreur suppression vidéo:', err);
       }
-    });
+    }
 
     await Marker.findByIdAndDelete(req.params.id);
     console.log('✅ Marqueur supprimé');
@@ -2396,21 +2433,23 @@ app.delete('/api/markers/:id/media/:type/:index', verifyToken, async (req, res) 
     const idx = parseInt(index);
 
     if (type === 'photo' && idx >= 0 && idx < marker.photos.length) {
-      const photoUrl = marker.photos[idx];
-      const photoPath = photoUrl.replace(`${BASE_URL}/`, '');
-      const fullPath = path.join(__dirname, photoPath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        console.log('Photo supprimée:', fullPath);
+      if (marker.photos[idx].cloudinaryPublicId) {
+        try {
+          await deleteFromCloudinary(marker.photos[idx].cloudinaryPublicId);
+          console.log('✅ Photo supprimée de Cloudinary:', marker.photos[idx].cloudinaryPublicId);
+        } catch (err) {
+          console.log('⚠️ Erreur suppression photo:', err.message);
+        }
       }
       marker.photos.splice(idx, 1);
     } else if (type === 'video' && idx >= 0 && idx < marker.videos.length) {
-      const videoUrl = marker.videos[idx];
-      const videoPath = videoUrl.replace(`${BASE_URL}/`, '');
-      const fullPath = path.join(__dirname, videoPath);
-      if (fs.existsSync(fullPath)) {
-        fs.unlinkSync(fullPath);
-        console.log('Vidéo supprimée:', fullPath);
+      if (marker.videos[idx].cloudinaryPublicId) {
+        try {
+          await deleteFromCloudinary(marker.videos[idx].cloudinaryPublicId);
+          console.log('✅ Vidéo supprimée de Cloudinary:', marker.videos[idx].cloudinaryPublicId);
+        } catch (err) {
+          console.log('⚠️ Erreur suppression vidéo:', err.message);
+        }
       }
       marker.videos.splice(idx, 1);
     } else {
@@ -2529,8 +2568,10 @@ app.post('/api/employees', verifyToken, verifyCanCreateEmployees, employeeUpload
       phone: phone.trim(),
       role: role?.trim() || '',
       department: department?.trim() || 'IT',
-      faceImage: req.files.faceImage?.[0] ? `${BASE_URL}/${req.files.faceImage[0].path.replace(/\\/g, '/')}` : '',
-      certificate: req.files.certificate?.[0] ? `${BASE_URL}/${req.files.certificate[0].path.replace(/\\/g, '/')}` : '',
+      faceImage: req.files.faceImage?.[0] ? req.files.faceImage[0].path : '',
+      faceImagePublicId: req.files.faceImage?.[0] ? req.files.faceImage[0].filename : undefined,
+      certificate: req.files.certificate?.[0] ? req.files.certificate[0].path : '',
+      certificatePublicId: req.files.certificate?.[0] ? req.files.certificate[0].filename : undefined,
       startDate: startDate ? new Date(startDate) : undefined,
       endDate: endDate ? new Date(endDate) : undefined,
       certificateStartDate: certificateStartDate ? new Date(certificateStartDate) : undefined,
@@ -2538,6 +2579,7 @@ app.post('/api/employees', verifyToken, verifyCanCreateEmployees, employeeUpload
     });
 
     await employee.save();
+    console.log('✅ Employé créé (Cloudinary):', employee._id);
     res.json({ message: 'Employé créé', employee: employee.toObject() });
 
     // Créer une notification pour tous les admins (asynchrone)
@@ -2614,20 +2656,30 @@ app.put('/api/employees/:id', verifyToken, verifyCanCreateEmployees, employeeUpl
     if (certificateStartDate) employee.certificateStartDate = new Date(certificateStartDate);
     if (certificateEndDate) employee.certificateEndDate = new Date(certificateEndDate);
 
-    // Mise à jour des fichiers si fournis
+    // Mise à jour des fichiers si fournis (Cloudinary)
     if (req.files.faceImage?.[0]) {
-      if (employee.faceImage) {
-        const oldFacePath = path.join(__dirname, employee.faceImage.replace(`${BASE_URL}/`, ''));
-        if (fs.existsSync(oldFacePath)) fs.unlinkSync(oldFacePath);
+      if (employee.faceImagePublicId) {
+        try {
+          await deleteFromCloudinary(employee.faceImagePublicId);
+          console.log('✅ Ancienne photo visage supprimée:', employee.faceImagePublicId);
+        } catch (err) {
+          console.log('⚠️ Erreur suppression photo:', err.message);
+        }
       }
-      employee.faceImage = `${BASE_URL}/${req.files.faceImage[0].path.replace(/\\/g, '/')}`;
+      employee.faceImage = req.files.faceImage[0].path;
+      employee.faceImagePublicId = req.files.faceImage[0].filename;
     }
     if (req.files.certificate?.[0]) {
-      if (employee.certificate) {
-        const oldCertPath = path.join(__dirname, employee.certificate.replace(`${BASE_URL}/`, ''));
-        if (fs.existsSync(oldCertPath)) fs.unlinkSync(oldCertPath);
+      if (employee.certificatePublicId) {
+        try {
+          await deleteFromCloudinary(employee.certificatePublicId);
+          console.log('✅ Ancien certificat supprimé:', employee.certificatePublicId);
+        } catch (err) {
+          console.log('⚠️ Erreur suppression certificat:', err.message);
+        }
       }
-      employee.certificate = `${BASE_URL}/${req.files.certificate[0].path.replace(/\\/g, '/')}`;
+      employee.certificate = req.files.certificate[0].path;
+      employee.certificatePublicId = req.files.certificate[0].filename;
     }
 
     employee.updatedAt = new Date();
@@ -2675,14 +2727,22 @@ app.delete('/api/employees/:id', verifyToken, verifyCanCreateEmployees, async (r
     const employee = await Employee.findById(id);
     if (!employee) return res.status(404).json({ message: 'Employé non trouvé' });
 
-    // Supprimer les fichiers associés
-    if (employee.faceImage) {
-      const facePath = path.join(__dirname, employee.faceImage);
-      if (fs.existsSync(facePath)) fs.unlinkSync(facePath);
+    // Supprimer les fichiers de Cloudinary
+    if (employee.faceImagePublicId) {
+      try {
+        await deleteFromCloudinary(employee.faceImagePublicId);
+        console.log('✅ Photo visage supprimée de Cloudinary:', employee.faceImagePublicId);
+      } catch (err) {
+        console.log('⚠️ Erreur suppression photo:', err.message);
+      }
     }
-    if (employee.certificate) {
-      const certPath = path.join(__dirname, employee.certificate);
-      if (fs.existsSync(certPath)) fs.unlinkSync(certPath);
+    if (employee.certificatePublicId) {
+      try {
+        await deleteFromCloudinary(employee.certificatePublicId);
+        console.log('✅ Certificat supprimé de Cloudinary:', employee.certificatePublicId);
+      } catch (err) {
+        console.log('⚠️ Erreur suppression certificat:', err.message);
+      }
     }
 
     const employeeName = employee.name;
@@ -3025,9 +3085,13 @@ app.delete('/api/users/:id', verifyToken, verifyCanManageUsers, async (req, res)
     return res.status(403).json({ message: 'Impossible de supprimer l\'admin principal' });
   }
 
-  if (user.profileImage) {
-    const imgPath = path.join(__dirname, user.profileImage);
-    if (fs.existsSync(imgPath)) fs.unlinkSync(imgPath);
+  if (user.cloudinaryPublicId) {
+    try {
+      await deleteFromCloudinary(user.cloudinaryPublicId);
+      console.log('✅ Photo de profil supprimée de Cloudinary:', user.cloudinaryPublicId);
+    } catch (err) {
+      console.log('⚠️ Erreur suppression photo:', err.message);
+    }
   }
 
   await User.findByIdAndDelete(req.params.id);
@@ -3690,7 +3754,7 @@ app.get('/api/stories', verifyToken, async (req, res) => {
 // Créer une nouvelle story
 app.post('/api/stories', verifyToken, storyUpload.single('media'), async (req, res) => {
   try {
-    console.log('\n=== CRÉATION STORY ===');
+    console.log('\n=== CRÉATION STORY (Cloudinary) ===');
     console.log('Body:', req.body);
     console.log('File:', req.file);
     
@@ -3698,9 +3762,12 @@ app.post('/api/stories', verifyToken, storyUpload.single('media'), async (req, r
     
     let mediaUrl = null;
     let mediaType = 'text';
+    let cloudinaryPublicId = null;
 
     if (req.file) {
-      mediaUrl = `${BASE_URL}/uploads/stories/${req.file.filename}`;
+      // Utiliser l'URL Cloudinary directement
+      mediaUrl = req.file.path; // URL complète Cloudinary
+      cloudinaryPublicId = req.file.filename; // Public ID pour suppression
       
       // Détection du type de média
       console.log('📹 MIME type du fichier:', req.file.mimetype);
@@ -3724,7 +3791,8 @@ app.post('/api/stories', verifyToken, storyUpload.single('media'), async (req, r
         }
       }
       
-      console.log('✅ Fichier uploadé:', mediaUrl);
+      console.log('✅ Fichier uploadé sur Cloudinary:', mediaUrl);
+      console.log('🆔 Public ID:', cloudinaryPublicId);
       console.log('📊 Type final:', mediaType);
     } else if (bodyMediaType) {
       mediaType = bodyMediaType;
@@ -3735,6 +3803,7 @@ app.post('/api/stories', verifyToken, storyUpload.single('media'), async (req, r
       content: content || '',
       mediaUrl,
       mediaType,
+      cloudinaryPublicId, // Stocker pour suppression future
       backgroundColor: backgroundColor || '#00D4FF',
       duration: parseInt(duration) || 5,
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000) // 24h
@@ -3886,12 +3955,13 @@ app.delete('/api/stories/:id', verifyToken, async (req, res) => {
       return res.status(403).json({ message: 'Non autorisé à supprimer cette story' });
     }
 
-    // Supprimer le fichier média si existe
-    if (story.mediaUrl) {
-      const filename = story.mediaUrl.split('/').pop();
-      const filepath = path.join(__dirname, 'uploads', filename);
-      if (fs.existsSync(filepath)) {
-        fs.unlinkSync(filepath);
+    // Supprimer le fichier de Cloudinary si existe
+    if (story.cloudinaryPublicId) {
+      try {
+        await deleteFromCloudinary(story.cloudinaryPublicId);
+        console.log('✅ Fichier supprimé de Cloudinary:', story.cloudinaryPublicId);
+      } catch (err) {
+        console.log('⚠️ Erreur suppression Cloudinary:', err.message);
       }
     }
 
