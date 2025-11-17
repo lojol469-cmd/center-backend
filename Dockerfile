@@ -16,7 +16,7 @@ WORKDIR /app
 COPY package*.json ./
 
 # Installer les dépendances en production
-RUN npm ci --only=production && \
+RUN npm install --omit=dev && \
     npm cache clean --force
 
 # Copier le code source (uniquement Node.js)
