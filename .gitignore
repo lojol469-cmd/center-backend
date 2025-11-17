@@ -5,7 +5,11 @@ yarn-debug.log*
 yarn-error.log*
 package-lock.json
 
-# Python
+# ============================================
+# PYTHON & IA - NE JAMAIS COMMITER
+# ============================================
+*.py
+*.pyc
 __pycache__/
 *.py[cod]
 *$py.class
@@ -18,17 +22,65 @@ ENV/
 dist/
 build/
 
-# Environnement
+# Fichiers IA Python
+chat_agent_api.py
+requirements*.txt
+
+# ============================================
+# MODÈLES IA LOURDS - EXCLURE COMPLÈTEMENT
+# ============================================
+models/
+smolvlm_cache/
+mistral_models/
+stable_diffusion/
+tools/
+
+# Fichiers modèles volumineux
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.h5
+*.pkl
+*.model
+*.weights
+
+# ============================================
+# ENVIRONNEMENT & SECRETS
+# ============================================
 .env
 .env.local
+.env.production
 
-# Uploads et Storage
-uploads/*
-!uploads/.gitkeep
-storage/temp/*
-!storage/temp/.gitkeep
+# ============================================
+# UPLOADS & STORAGE (Cloudinary utilisé)
+# ============================================
+uploads/
+storage/
+temp/
 
-# IDE
+# ============================================
+# TESTS
+# ============================================
+test-*.js
+test-*.py
+test-*.ps1
+test-*.sh
+test-profile-upload.jpg
+coverage/
+.nyc_output/
+
+# ============================================
+# DOCUMENTATION LOCALE
+# ============================================
+DEPLOY_GUIDE.md
+RECAP.md
+README.md
+
+# ============================================
+# IDE & OS
+# ============================================
 .vscode/
 .idea/
 *.swp
@@ -36,18 +88,16 @@ storage/temp/*
 .DS_Store
 Thumbs.db
 
-# Logs
+# ============================================
+# LOGS
+# ============================================
 logs/
 *.log
 
-# Tests
-coverage/
-.nyc_output/
-
-# Docker
+# ============================================
+# DOCKER LOCAL
+# ============================================
 .dockerignore
+.dockerignore.node
 docker-compose.override.yml
 
-# OS
-.DS_Store
-Thumbs.db
