@@ -4,16 +4,22 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 
-# Python (ne pas inclure)
+# Python et IA (NE PAS INCLURE)
 *.py
 *.pyc
 __pycache__/
 venv/
 env/
 .Python
-models/unified_agent.py
 chat_agent_api.py
 requirements*.txt
+
+# Dossier models/ (IA Python)
+models/
+smolvlm_cache/
+mistral_models/
+stable_diffusion/
+tools/
 
 # Tests
 test/
@@ -49,8 +55,20 @@ Thumbs.db
 
 # Uploads temporaires (seront créés par le conteneur)
 uploads/*
-storage/temp/*
+!uploads/.gitkeep
+storage/*
+!storage/.gitkeep
+temp/
 
 # Build
 build/
 dist/
+
+# Fichiers volumineux
+*.gguf
+*.bin
+*.safetensors
+*.pt
+*.pth
+*.h5
+*.pkl

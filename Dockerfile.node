@@ -19,13 +19,11 @@ COPY package*.json ./
 RUN npm ci --only=production && \
     npm cache clean --force
 
-# Copier le code source
+# Copier le code source (uniquement Node.js)
 COPY server.js ./
 COPY routes/ ./routes/
 COPY controllers/ ./controllers/
-COPY models/ ./models/
 COPY services/ ./services/
-COPY middleware/ ./middleware/
 
 # Créer les dossiers nécessaires
 RUN mkdir -p uploads storage/temp
