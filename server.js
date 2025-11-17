@@ -59,7 +59,19 @@ function getLocalNetworkIP() {
 
 // Obtenir l'IP automatiquement
 const SERVER_IP = getLocalNetworkIP();
-const BASE_URL = `http://${SERVER_IP}:${process.env.PORT || 5000}`;
+
+// ✅ Détection automatique de l'environnement
+// En production (Render), utiliser l'URL Render au lieu de l'IP locale
+let BASE_URL;
+if (process.env.NODE_ENV === 'production' && process.env.RENDER) {
+  // En production sur Render, utiliser l'URL Render
+  BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://center-backend-pvkq.onrender.com';
+  console.log(`🌐 Mode PRODUCTION détecté (Render)`);
+} else {
+  // En développement, utiliser l'IP locale
+  BASE_URL = `http://${SERVER_IP}:${process.env.PORT || 5000}`;
+  console.log(`🌐 Mode DÉVELOPPEMENT détecté`);
+}
 
 console.log(`🌐 URL de base du serveur: ${BASE_URL}`);
 
@@ -142,7 +154,14 @@ app.use((req, res, next) => {
 // CONFIGURATION GÉNÉRALE
 // ========================================
 
-app.use(cors());
+// Configuration CORS pour accepter toutes les origines (production + développement)
+app.use(cors({
+  origin: '*', // Accepter toutes les origines (Flutter mobile, web, etc.)
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
+  credentials: true
+}));
+
 app.use(express.json());
 
 // Servir les fichiers statiques (uploads)
