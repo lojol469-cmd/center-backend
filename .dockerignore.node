@@ -1,0 +1,56 @@
+# Node.js
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Python (ne pas inclure)
+*.py
+*.pyc
+__pycache__/
+venv/
+env/
+.Python
+models/unified_agent.py
+chat_agent_api.py
+requirements*.txt
+
+# Tests
+test/
+tests/
+*.test.js
+coverage/
+
+# Documentation
+*.md
+docs/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Git
+.git/
+.gitignore
+
+# Environnement local
+.env.local
+.env.development
+
+# Logs
+logs/
+*.log
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Uploads temporaires (seront créés par le conteneur)
+uploads/*
+storage/temp/*
+
+# Build
+build/
+dist/
