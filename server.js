@@ -867,8 +867,9 @@ async function sendEmailNotification(userEmail, subject, htmlContent) {
   }
 }
 
-// Initialiser les fonctions de notification dans le controller
+// Initialiser les fonctions de notification et les modèles dans le controller
 const publicationController = require('./controllers/publicationController');
+publicationController.initModels(Publication, User, Notification);
 publicationController.initNotifications(sendPushNotification, sendEmailNotification, BASE_URL);
 
 // Envoyer une notification à un utilisateur
