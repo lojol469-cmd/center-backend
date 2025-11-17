@@ -3,8 +3,6 @@
  * Gère toutes les opérations CRUD sur les publications
  */
 
-const { broadcastToAll } = require('../websocket');
-
 // Variables globales pour les modèles et fonctions depuis server.js
 let Publication = null;
 let User = null;
@@ -12,6 +10,7 @@ let Notification = null;
 let sendPushNotificationFunc = null;
 let sendEmailNotificationFunc = null;
 let baseUrl = null;
+let broadcastToAll = null;
 
 // Fonction pour initialiser les dépendances et modèles
 exports.initNotifications = (sendPush, sendEmail, url) => {
@@ -25,6 +24,11 @@ exports.initModels = (publicationModel, userModel, notificationModel) => {
   Publication = publicationModel;
   User = userModel;
   Notification = notificationModel;
+};
+
+// Fonction pour initialiser WebSocket
+exports.initWebSocket = (broadcastFunc) => {
+  broadcastToAll = broadcastFunc;
 };
 
 /**
@@ -106,10 +110,12 @@ exports.createPublication = async (req, res) => {
       .populate('userId', 'firstName lastName email faceImage avatar');
 
     // Notifier via WebSocket
-    broadcastToAll({
-      type: 'new_publication',
-      publication: populatedPublication
-    });
+    if (broadcastToAll) {
+      broadcastToAll({
+        type: 'new_publication',
+        publication: populatedPublication
+      });
+    }
 
     res.status(201).json({
       success: true,
@@ -144,10 +150,12 @@ exports.deletePublication = async (req, res) => {
     await Publication.deleteOne({ _id: req.params.id });
 
     // Notifier via WebSocket
-    broadcastToAll({
-      type: 'publication_deleted',
-      publicationId: req.params.id
-    });
+    if (broadcastToAll) {
+      broadcastToAll({
+        type: 'publication_deleted',
+        publicationId: req.params.id
+      });
+    }
 
     res.json({
       success: true,
@@ -286,13 +294,15 @@ exports.toggleLike = async (req, res) => {
     await publication.save();
 
     // Notifier via WebSocket
-    broadcastToAll({
-      type: 'publication_liked',
-      publicationId: req.params.id,
-      userId,
-      isLiked,
-      likesCount: publication.likes.length
-    });
+    if (broadcastToAll) {
+      broadcastToAll({
+        type: 'publication_liked',
+        publicationId: req.params.id,
+        userId,
+        isLiked,
+        likesCount: publication.likes.length
+      });
+    }
 
     res.json({
       success: true,

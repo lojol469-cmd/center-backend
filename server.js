@@ -871,6 +871,7 @@ async function sendEmailNotification(userEmail, subject, htmlContent) {
 const publicationController = require('./controllers/publicationController');
 publicationController.initModels(Publication, User, Notification);
 publicationController.initNotifications(sendPushNotification, sendEmailNotification, BASE_URL);
+publicationController.initWebSocket(broadcastToAll);
 
 // Envoyer une notification à un utilisateur
 app.post('/api/notifications/send', verifyToken, async (req, res) => {
