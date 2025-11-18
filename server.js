@@ -123,7 +123,7 @@ const SERVER_IP = getLocalNetworkIP();
 let BASE_URL;
 if (process.env.NODE_ENV === 'production' && process.env.RENDER) {
   // En production sur Render, utiliser l'URL Render
-  BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://center-backend-pvkq.onrender.com';
+  BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://center-backend-v9rf.onrender.com';
   console.log(`🌐 Mode PRODUCTION détecté (Render)`);
 } else {
   // En développement, utiliser l'IP locale
