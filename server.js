@@ -329,6 +329,9 @@ const messageSchema = new mongoose.Schema({
   }],
   isRead: { type: Boolean, default: false },
   readAt: { type: Date },
+  // Champs pour les messages de groupe
+  isGroupMessage: { type: Boolean, default: false },
+  groupId: { type: String, default: null },
   createdAt: { type: Date, default: Date.now }
 });
 const Message = mongoose.model('Message', messageSchema);
@@ -1110,6 +1113,43 @@ app.post('/api/messages/send', verifyToken, async (req, res) => {
     });
   } catch (error) {
     console.error('❌ Erreur envoi message:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur serveur' 
+    });
+  }
+});
+
+// Récupérer la liste des utilisateurs pour la messagerie (accessible à tous les utilisateurs authentifiés)
+app.get('/api/messages/users', verifyToken, async (req, res) => {
+  try {
+    console.log('\n=== RÉCUPÉRATION UTILISATEURS POUR MESSAGERIE ===');
+    console.log('User ID:', req.user.userId);
+
+    // Récupérer tous les utilisateurs actifs et admins (sauf l'utilisateur actuel)
+    const users = await User.find({
+      _id: { $ne: req.user.userId }, // Exclure l'utilisateur actuel
+      status: { $in: ['active', 'admin'] }
+    })
+    .select('name email profileImage status')
+    .sort({ name: 1 });
+
+    const usersData = users.map(user => ({
+      _id: user._id,
+      name: user.name || user.email.split('@')[0], // Utiliser le nom ou la partie avant @ de l'email
+      email: user.email,
+      profileImage: user.profileImage,
+      status: user.status
+    }));
+
+    console.log(`✅ ${usersData.length} utilisateurs trouvés pour la messagerie`);
+
+    res.json({ 
+      success: true,
+      users: usersData 
+    });
+  } catch (error) {
+    console.error('❌ Erreur récupération utilisateurs messagerie:', error);
     res.status(500).json({ 
       success: false,
       message: 'Erreur serveur' 
@@ -3223,10 +3263,62 @@ app.get('/api/users/me/storage', verifyToken, async (req, res) => {
   }
 });
 
-app.get('/api/users', verifyToken, verifyCanManageUsers, async (req, res) => {
-  const users = await User.find().select('-password -otp -otpExpires');
-  const usersData = users.map(user => user.toObject());
-  res.json({ users: usersData });
+app.get('/api/users', verifyToken, async (req, res) => {
+  try {
+    console.log('\n=== RÉCUPÉRATION TOUS LES UTILISATEURS ===');
+    console.log('User ID:', req.user.userId);
+
+    // Récupérer tous les utilisateurs actifs et admins (sauf l'utilisateur actuel)
+    const users = await User.find({
+      _id: { $ne: req.user.userId }, // Exclure l'utilisateur actuel
+      status: { $in: ['active', 'admin'] }
+    })
+    .select('name email profileImage status')
+    .sort({ name: 1 });
+
+    const usersData = users.map(user => ({
+      _id: user._id,
+      name: user.name || user.email.split('@')[0], // Utiliser le nom ou la partie avant @ de l'email
+      email: user.email,
+      profileImage: user.profileImage,
+      status: user.status
+    }));
+
+    console.log(`✅ ${usersData.length} utilisateurs trouvés pour tous les utilisateurs authentifiés`);
+
+    res.json({
+      success: true,
+      users: usersData
+    });
+  } catch (error) {
+    console.error('❌ Erreur récupération tous les utilisateurs:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur'
+    });
+  }
+});
+
+// Route publique pour récupérer la liste des utilisateurs (pour messagerie)
+app.get('/api/users/list', verifyToken, async (req, res) => {
+  try {
+    const users = await User.find({ status: { $in: ['active', 'admin'] } })
+      .select('name email profileImage status')
+      .sort({ name: 1 });
+
+    const usersData = users.map(user => ({
+      _id: user._id,
+      name: user.name || user.email.split('@')[0],
+      email: user.email,
+      profileImage: user.profileImage,
+      status: user.status
+    }));
+
+    res.json({ users: usersData });
+  } catch (error) {
+    console.error('Erreur récupération liste utilisateurs:', error);
+    res.status(500).json({ message: 'Erreur serveur' });
+  }
 });
 
 app.put('/api/users/:id/status', verifyToken, verifyCanManageUsers, async (req, res) => {
@@ -4109,47 +4201,162 @@ app.get('/api/stories/:id/views', verifyToken, async (req, res) => {
   }
 });
 
-// Supprimer une story
-app.delete('/api/stories/:id', verifyToken, async (req, res) => {
+// ========================================
+// ROUTES : GROUP CHAT
+// ========================================
+
+// Récupérer les messages du group chat général
+app.get('/api/chat/groups/general/messages', verifyToken, async (req, res) => {
   try {
-    const story = await Story.findById(req.params.id);
-    
-    if (!story) {
-      return res.status(404).json({ message: 'Story non trouvée' });
-    }
+    console.log('\n=== RÉCUPÉRATION MESSAGES GROUP CHAT ===');
+    console.log('User ID:', req.user.userId);
 
-    // Vérifier que c'est bien l'auteur
-    if (story.userId.toString() !== req.user.userId) {
-      return res.status(403).json({ message: 'Non autorisé à supprimer cette story' });
-    }
+    // Pour l'instant, on utilise la collection Message existante avec un champ spécial pour les messages de groupe
+    // Plus tard, on pourra créer une collection séparée pour les messages de groupe
+    const messages = await Message.find({
+      // Messages de groupe général (on peut utiliser un champ spécial ou une logique différente)
+      $or: [
+        // Messages envoyés au groupe général
+        { receiverId: 'general_group' },
+        // Ou messages marqués comme groupe
+        { isGroupMessage: true, groupId: 'general' }
+      ]
+    })
+    .populate('senderId', 'name email profileImage')
+    .sort({ createdAt: 1 }) // Ordre chronologique
+    .limit(100); // Limiter aux 100 derniers messages
 
-    // Supprimer le fichier de Cloudinary si existe
-    if (story.cloudinaryPublicId) {
-      try {
-        await deleteFromCloudinary(story.cloudinaryPublicId);
-        console.log('✅ Fichier supprimé de Cloudinary:', story.cloudinaryPublicId);
-      } catch (err) {
-        console.log('⚠️ Erreur suppression Cloudinary:', err.message);
-      }
-    }
+    const messagesData = messages.map(msg => ({
+      _id: msg._id,
+      content: msg.content,
+      senderId: msg.senderId,
+      sender: {
+        _id: msg.senderId._id,
+        name: msg.senderId.name || msg.senderId.email.split('@')[0],
+        email: msg.senderId.email,
+        profileImage: msg.senderId.profileImage
+      },
+      createdAt: msg.createdAt,
+      type: 'group_message'
+    }));
 
-    await Story.deleteOne({ _id: req.params.id });
-
-    // Notifier via WebSocket
-    broadcastToAll({
-      type: 'story_deleted',
-      storyId: req.params.id
-    });
+    console.log(`✅ ${messagesData.length} messages de group chat trouvés`);
 
     res.json({
       success: true,
-      message: 'Story supprimée avec succès'
+      messages: messagesData
     });
-  } catch (err) {
-    console.error('Erreur suppression story:', err);
-    res.status(500).json({ 
-      message: 'Erreur lors de la suppression de la story',
-      error: err.message 
+  } catch (error) {
+    console.error('❌ Erreur récupération messages group chat:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur'
+    });
+  }
+});
+
+// Récupérer les utilisateurs en ligne pour le group chat
+app.get('/api/chat/groups/general/online', verifyToken, async (req, res) => {
+  try {
+    console.log('\n=== RÉCUPÉRATION UTILISATEURS EN LIGNE GROUP CHAT ===');
+    console.log('User ID:', req.user.userId);
+
+    // Pour l'instant, retourner tous les utilisateurs actifs/admins
+    // Plus tard, on pourra implémenter un système de présence en temps réel
+    const onlineUsers = await User.find({
+      status: { $in: ['active', 'admin'] }
+    })
+    .select('name email profileImage status lastSeen')
+    .sort({ name: 1 });
+
+    const onlineUsersData = onlineUsers.map(user => ({
+      _id: user._id,
+      name: user.name || user.email.split('@')[0],
+      email: user.email,
+      profileImage: user.profileImage,
+      status: user.status,
+      isOnline: true, // Pour l'instant, tous sont considérés en ligne
+      lastSeen: user.lastSeen || new Date()
+    }));
+
+    console.log(`✅ ${onlineUsersData.length} utilisateurs en ligne trouvés`);
+
+    res.json({
+      success: true,
+      onlineUsers: onlineUsersData
+    });
+  } catch (error) {
+    console.error('❌ Erreur récupération utilisateurs en ligne:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur'
+    });
+  }
+});
+
+// Envoyer un message dans le group chat général
+app.post('/api/chat/groups/general/messages', verifyToken, async (req, res) => {
+  try {
+    console.log('\n=== ENVOI MESSAGE GROUP CHAT ===');
+    console.log('User ID:', req.user.userId);
+    console.log('Content:', req.body.content?.substring(0, 50) + '...');
+
+    const { content } = req.body;
+
+    if (!content?.trim()) {
+      return res.status(400).json({
+        success: false,
+        message: 'Contenu du message requis'
+      });
+    }
+
+    // Créer un message de groupe en utilisant la collection Message existante
+    const groupMessage = new Message({
+      senderId: req.user.userId,
+      receiverId: 'general_group', // Identifiant spécial pour le groupe général
+      content: content.trim(),
+      isGroupMessage: true,
+      groupId: 'general',
+      createdAt: new Date()
+    });
+
+    await groupMessage.save();
+
+    // Populate pour retourner les données complètes
+    await groupMessage.populate('senderId', 'name email profileImage');
+
+    const messageData = {
+      _id: groupMessage._id,
+      content: groupMessage.content,
+      senderId: groupMessage.senderId,
+      sender: {
+        _id: groupMessage.senderId._id,
+        name: groupMessage.senderId.name || groupMessage.senderId.email.split('@')[0],
+        email: groupMessage.senderId.email,
+        profileImage: groupMessage.senderId.profileImage
+      },
+      createdAt: groupMessage.createdAt,
+      type: 'group_message'
+    };
+
+    console.log('✅ Message de group chat envoyé:', groupMessage._id);
+
+    // Diffuser le message via WebSocket à tous les utilisateurs connectés
+    broadcastToAll({
+      type: 'group_message',
+      message: messageData
+    });
+
+    res.status(201).json({
+      success: true,
+      message: 'Message envoyé dans le group chat',
+      messageData: messageData
+    });
+  } catch (error) {
+    console.error('❌ Erreur envoi message group chat:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur serveur'
     });
   }
 });
