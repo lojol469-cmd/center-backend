@@ -1,0 +1,23 @@
+# Chat Agent API - Python Dependencies
+# Installation: pip install -r requirements-chat.txt
+
+# Web Framework
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+# Vector Search & Embeddings
+sentence-transformers==3.3.1
+faiss-cpu==1.9.0.post1
+
+# PDF Processing
+PyPDF2==3.0.1
+PyMuPDF==1.24.14
+
+# Image Processing
+Pillow==11.0.0
+
+# Existing dependencies (should already be installed)
+transformers>=4.30.0
+torch>=2.0.0
+numpy>=1.24.0

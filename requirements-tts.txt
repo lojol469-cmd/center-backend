@@ -1,0 +1,27 @@
+# Requirements spécifiques pour TTS
+# Compatible avec Python 3.9-3.11
+
+# TTS Framework
+TTS==0.22.0
+
+# Core dependencies
+numpy<2.0.0
+torch>=2.0.0
+torchaudio
+transformers
+numba
+librosa
+scipy
+soundfile
+inflect
+unidecode
+pypinyin
+
+# API Framework
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+
+# Utilities
+requests

@@ -1,0 +1,45 @@
+fastapi
+uvicorn[standard]
+python-multipart
+pydantic
+pydantic-settings
+
+# LLM
+llama-cpp-python
+
+# Vision-Language Models (SmolVLM)
+transformers
+torch
+torchvision
+accelerate
+bitsandbytes
+
+# Text-to-Speech (TTS)
+TTS>=0.22.0
+# Alternative: pyttsx3 (offline, leger)
+# Alternative: gTTS (Google TTS, online)
+
+# LangChain
+langchain
+langchain-community
+
+# Vector Store & Embeddings
+faiss-cpu
+sentence-transformers
+
+# Tools
+tavily-python
+requests
+
+# Machine Learning
+scikit-learn
+numpy
+joblib
+
+# Visualization
+matplotlib
+Pillow
+
+# Utilities
+python-dotenv
+websockets
