@@ -3337,6 +3337,46 @@ app.put('/api/users/:id/status', verifyToken, verifyCanManageUsers, async (req, 
   res.json({ message: 'Statut mis à jour', user });
 });
 
+app.put('/api/users/:id/access-level', verifyToken, verifyCanManageUsers, async (req, res) => {
+  console.log('\n=== MISE À JOUR NIVEAU D\'ACCÈS ===');
+  console.log('User ID:', req.params.id);
+  console.log('Access Level:', req.body.accessLevel);
+  console.log('Token User ID:', req.user.userId);
+
+  const { accessLevel } = req.body;
+  if (![0, 1, 2].includes(accessLevel)) {
+    console.log('❌ Niveau d\'accès invalide:', accessLevel);
+    return res.status(400).json({ message: 'Niveau d\'accès invalide' });
+  }
+
+  try {
+    console.log('🔍 Recherche de l\'utilisateur...');
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      console.log('❌ Utilisateur non trouvé:', req.params.id);
+      return res.status(404).json({ message: 'Utilisateur non trouvé' });
+    }
+
+    console.log('✅ Utilisateur trouvé:', user.name, user.email);
+
+    const mainAdmin = ['nyundumathryme@gmail', 'nyundumathryme@gmail.com'].includes(user.email.toLowerCase());
+    if (mainAdmin) {
+      console.log('🚫 Tentative de modification de l\'admin principal');
+      return res.status(403).json({ message: 'Impossible de modifier l\'admin principal' });
+    }
+
+    console.log('🔄 Mise à jour du niveau d\'accès:', user.accessLevel, '→', accessLevel);
+    user.accessLevel = accessLevel;
+    await user.save();
+
+    console.log('✅ Niveau d\'accès mis à jour avec succès');
+    res.json({ message: 'Niveau d\'accès mis à jour', user });
+  } catch (error) {
+    console.error('❌ Erreur lors de la mise à jour du niveau d\'accès:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+});
+
 app.delete('/api/users/:id', verifyToken, verifyCanManageUsers, async (req, res) => {
   const user = await User.findById(req.params.id);
   if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé' });
