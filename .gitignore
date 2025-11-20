@@ -5,29 +5,9 @@ yarn-debug.log*
 yarn-error.log*
 
 # ============================================
-# PYTHON & IA - NE JAMAIS COMMITER
+# PYTHON & IA - INCLURE LE CODE MAIS PAS LES MODÈLES
 # ============================================
-*.py
-*.pyc
-__pycache__/
-*.py[cod]
-*$py.class
-*.so
-.Python
-venv/
-env/
-ENV/
-*.egg-info/
-dist/
-build/
-
-# Fichiers IA Python
-chat_agent_api.py
-requirements*.txt
-
-# ============================================
-# MODÈLES IA LOURDS - EXCLURE COMPLÈTEMENT
-# ============================================
+# Exclure seulement les modèles lourds, garder le code Python
 models/
 smolvlm_cache/
 mistral_models/
@@ -44,6 +24,24 @@ tools/
 *.pkl
 *.model
 *.weights
+
+# Garder le code Python et les requirements
+# chat_agent_api.py  <- À INCLURE
+# unified_agent.py   <- À INCLURE
+# requirements*.txt  <- À INCLURE
+
+*.pyc
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+venv/
+env/
+ENV/
+*.egg-info/
+dist/
+build/
 
 # ============================================
 # ENVIRONNEMENT & SECRETS

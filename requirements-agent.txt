@@ -1,18 +1,20 @@
-# 🔧 Requirements pour Agent IA Multimodal
+# 🔧 Requirements pour Agent IA Multimodal - CUDA 13.0
 # ==========================================
-# Toutes les dépendances nécessaires
+# Adapté pour RTX 5090 avec CUDA 13.0 (cu130)
 
-# Core ML/DL
-torch>=2.1.0
+# Core ML/DL - CUDA 13.0 NIGHTLY
+torch>=2.10.0.dev --pre --index-url https://download.pytorch.org/whl/nightly/cu130
+torchvision>=0.25.0.dev --pre --index-url https://download.pytorch.org/whl/nightly/cu130
+torchaudio>=2.10.0.dev --pre --index-url https://download.pytorch.org/whl/nightly/cu130
 transformers>=4.35.0
 accelerate>=0.25.0
 sentencepiece>=0.1.99
 
-# LLM (Mistral)
+# LLM (Mistral) - Compatible CUDA
 llama-cpp-python>=0.2.0
 
-# TTS (Coqui)
-TTS>=0.22.0
+# TTS (Alternative simple)
+pyttsx3>=2.90
 
 # Vision & Image
 Pillow>=10.0.0

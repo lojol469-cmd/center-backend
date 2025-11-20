@@ -312,7 +312,13 @@ class ChatAgentManager:
     """Gestionnaire principal du chat agent"""
     
     def __init__(self):
-        self.agent = UnifiedAgent()
+        # Désactiver temporairement les modèles lourds pour permettre le démarrage rapide
+        self.agent = UnifiedAgent(
+            enable_voice=False,
+            enable_vision=False,
+            enable_detection=False,
+            enable_llm=False
+        )
         self.memory = FAISSMemoryManager()
         
         # Créer le dossier de stockage
@@ -446,33 +452,45 @@ class ChatAgentManager:
                         image = background
                         logger.info(f"🔄 Image convertie de {image.mode} en RGB")
                     
-                    # Analyser l'image avec SmolVLM + YOLO (TOUJOURS ACTIFS)
-                    logger.info(f"👁️ [SmolVLM + YOLO] Analyse complète de l'image: {filename} ({file_type})")
+                    # Analyser l'image avec SmolVLM + YOLO (si disponibles)
+                    logger.info(f"👁️ [Analyse Image] Traitement de l'image: {filename} ({file_type})")
                     
-                    # Sauvegarder temporairement l'image pour process_image
-                    temp_path = Path(__file__).parent / "storage" / "temp" / filename
-                    temp_path.parent.mkdir(parents=True, exist_ok=True)
-                    image.save(temp_path)
-                    
-                    # UTILISER TOUS LES OUTILS: SmolVLM + YOLO + Mistral + Tavily
-                    analysis = self.agent.process_image(
-                        image_path=str(temp_path),
-                        question=description or "Analyse cette image en détail avec tous les objets visibles.",
-                        detect_objects=True  # ✅ TOUJOURS ACTIVER YOLO
-                    )
-                    
-                    # Nettoyer le fichier temporaire
-                    if temp_path.exists():
-                        temp_path.unlink()
-                    
-                    # Extraire la description depuis le résultat
-                    # process_image retourne: {vision: {description: ...}, detection: ..., synthesis: ...}
-                    if "error" in analysis:
-                        raise HTTPException(500, f"Erreur analyse: {analysis['error']}")
-                    
-                    vision_result = analysis.get("vision", {})
-                    description_text = vision_result.get("description", "")
-                    synthesis_text = analysis.get("synthesis", "")
+                    # Vérifier si les outils visuels sont disponibles
+                    if ("vision" in self.agent.tools and self.agent.tools["vision"].is_ready) or ("detection" in self.agent.tools and self.agent.tools["detection"].is_ready):
+                        # Sauvegarder temporairement l'image pour process_image
+                        temp_path = Path(__file__).parent / "storage" / "temp" / filename
+                        temp_path.parent.mkdir(parents=True, exist_ok=True)
+                        image.save(temp_path)
+                        
+                        # UTILISER TOUS LES OUTILS: SmolVLM + YOLO + Mistral + Tavily
+                        analysis = self.agent.process_image(
+                            image_path=str(temp_path),
+                            question=description or "Analyse cette image en détail avec tous les objets visibles.",
+                            detect_objects=True  # ✅ TOUJOURS ACTIVER YOLO
+                        )
+                        
+                        # Nettoyer le fichier temporaire
+                        if temp_path.exists():
+                            temp_path.unlink()
+                        
+                        # Extraire la description depuis le résultat
+                        # process_image retourne: {vision: {description: ...}, detection: ..., synthesis: ...}
+                        if "error" in analysis:
+                            logger.warning(f"⚠️ Erreur analyse IA: {analysis['error']}")
+                            # Analyse basique sans IA
+                            description_text = f"Image {file_type} de dimensions {image.width}x{image.height} pixels"
+                            synthesis_text = f"Image chargée avec succès. Modèles IA temporairement désactivés pour les tests."
+                            analysis = {"tools_used": ["Mode Basique"]}
+                        else:
+                            vision_result = analysis.get("vision", {})
+                            description_text = vision_result.get("description", "")
+                            synthesis_text = analysis.get("synthesis", "")
+                    else:
+                        # Mode basique sans modèles IA
+                        logger.info("📝 [Mode Basique] Analyse image sans IA")
+                        description_text = f"Image {file_type} de dimensions {image.width}x{image.height} pixels"
+                        synthesis_text = f"Image chargée avec succès. Modèles IA temporairement désactivés pour permettre les tests de connectivité."
+                        analysis = {"tools_used": ["Mode Basique"]}
                     
                     # Combiner vision et synthèse pour FAISS
                     full_description = f"{description_text}\n\nSynthèse: {synthesis_text}" if synthesis_text else description_text
@@ -563,15 +581,20 @@ class ChatAgentManager:
                             
                             # Analyser l'image avec SmolVLM
                             try:
-                                page_analysis = await self.agent.process_image(
-                                    image_path=str(temp_img_path),
-                                    query=f"Extrais et décris tout le texte visible sur cette page {page_num + 1}. Décris aussi les schémas, tableaux et éléments visuels importants.",
-                                    detect_objects=False  # Pas besoin de YOLO pour du texte
-                                )
-                                
-                                page_text = page_analysis.get("vision", "")
-                                if page_text:
-                                    all_text += f"\n\n=== Page {page_num + 1} (analysée visuellement) ===\n\n{page_text}"
+                                if "vision" in self.agent.tools and self.agent.tools["vision"].is_ready:
+                                    page_analysis = await self.agent.process_image(
+                                        image_path=str(temp_img_path),
+                                        query=f"Extrais et décris tout le texte visible sur cette page {page_num + 1}. Décris aussi les schémas, tableaux et éléments visuels importants.",
+                                        detect_objects=False  # Pas besoin de YOLO pour du texte
+                                    )
+                                    
+                                    page_text = page_analysis.get("vision", "")
+                                    if page_text:
+                                        all_text += f"\n\n=== Page {page_num + 1} (analysée visuellement) ===\n\n{page_text}"
+                                else:
+                                    # Mode basique
+                                    logger.info(f"📝 [Mode Basique] Page {page_num + 1} - OCR non disponible")
+                                    all_text += f"\n\n=== Page {page_num + 1} (PDF scanné - OCR désactivé) ===\n\n[Texte non extractible - modèles IA temporairement désactivés]"
                                 
                                 # Nettoyer l'image temporaire
                                 if temp_img_path.exists():
@@ -663,26 +686,24 @@ class ChatAgentManager:
                                     image_bytes = base_image["image"]
                                     
                                     # Analyser l'image
-                                    image = Image.open(io.BytesIO(image_bytes))
-                                    
-                                    # Sauvegarder temporairement
-                                    temp_img_path = Path(__file__).parent / "storage" / "temp" / f"pdf_img_{page_num}_{img_index}.jpg"
-                                    temp_img_path.parent.mkdir(parents=True, exist_ok=True)
-                                    image.save(temp_img_path)
-                                    
-                                    analysis = await self.agent.process_image(
-                                        image_path=str(temp_img_path),
-                                        query="Décris cette image extraite d'un document PDF.",
-                                        detect_objects=False
-                                    )
+                                    if "vision" in self.agent.tools and self.agent.tools["vision"].is_ready:
+                                        analysis = await self.agent.process_image(
+                                            image_path=str(temp_img_path),
+                                            query="Décris cette image extraite d'un document PDF.",
+                                            detect_objects=False
+                                        )
+                                        
+                                        vision_desc = analysis.get("vision", "")
+                                    else:
+                                        # Mode basique
+                                        logger.info(f"📝 [Mode Basique] Image PDF {page_num + 1}.{img_index} - analyse désactivée")
+                                        vision_desc = f"Image extraite de la page {page_num + 1} du PDF (analyse IA temporairement désactivée)"
                                     
                                     # Nettoyer
                                     if temp_img_path.exists():
                                         temp_img_path.unlink()
                                     
-                                    vision_desc = analysis.get("vision", "")
-                                    
-                                    # Ajouter à FAISS
+                                    # Ajouter à FAISS seulement si on a une description
                                     if vision_desc:
                                         doc_id = self.memory.add_document(
                                             text=f"Image page {page_num + 1}: {vision_desc}",
@@ -915,22 +936,34 @@ Réponds de manière naturelle et concise."""
             temp = 0.7
         
         # ========================================
-        # ÉTAPE 8: GÉNÉRATION AVEC MISTRAL-7B
+        # ÉTAPE 8: GÉNÉRATION AVEC MISTRAL-7B (OU RÉPONSE PAR DÉFAUT)
         # ========================================
-        logger.info("🧠 [Mistral-7B] Génération de réponse avec tous les contextes...")
-        agent_result = self.agent.chat(
-            message=full_message,
-            with_voice=False,
-            context={
-                "intent": intent,
-                "max_tokens": max_tokens,
-                "temperature": temp,
-                "tools_used": tools_used
-            }
-        )
-        
-        response_text = agent_result.get("response", "Aucune réponse générée")
-        tools_used.append("Mistral-7B (LLM)")
+        if "llm" in self.tools and self.tools["llm"].is_ready:
+            logger.info("🧠 [Mistral-7B] Génération de réponse avec tous les contextes...")
+            agent_result = self.agent.chat(
+                message=full_message,
+                with_voice=False,
+                context={
+                    "intent": intent,
+                    "max_tokens": max_tokens,
+                    "temperature": temp,
+                    "tools_used": tools_used
+                }
+            )
+            
+            response_text = agent_result.get("response", "Aucune réponse générée")
+            tools_used.append("Mistral-7B (LLM)")
+        else:
+            # Réponse par défaut quand les modèles sont désactivés
+            logger.info("📝 [Mode Basique] Génération de réponse simple (modèles désactivés)")
+            if intent == "explain_app":
+                response_text = "L'application CENTER est une plateforme de gestion d'employés avec chat IA, reconnaissance faciale et tableau de bord. Elle permet de gérer les profils employés, faire du pointage automatique et communiquer avec un assistant IA intelligent."
+            elif intent == "search":
+                response_text = "Fonction de recherche disponible. Les modèles IA sont temporairement désactivés pour permettre les tests de connectivité."
+            else:
+                response_text = f"Bonjour ! Je suis Kibali, votre assistant IA. Les modèles avancés sont temporairement désactivés pour les tests, mais je peux vous aider avec des réponses de base. Votre message : '{message}'"
+            
+            tools_used.append("Mode Basique (sans LLM)")
         
         # Ajouter les statistiques PDF si présentes
         if pdf_chunks_count > 0:
@@ -1011,29 +1044,13 @@ async def upload_file(
     
     Le fichier est analysé et ajouté à la mémoire vectorielle FAISS.
     """
-    try:
-        result = await chat_manager.process_upload(file, description)
-        
-        # S'assurer que la structure est correcte pour Flutter
-        if not result.get("documents"):
-            result["documents"] = []
-        
-        # LOG DÉTAILLÉ pour déboguer
-        logger.info(f"📤 Retour API: {len(result.get('documents', []))} documents, {len(str(result))} bytes")
-        logger.info(f"🔍 Clés dans result: {list(result.keys())}")
-        logger.info(f"🔍 Description présente: {'description' in result}")
-        logger.info(f"🔍 Synthesis présente: {'synthesis' in result}")
-        
-        # Afficher un extrait de la réponse
-        if result.get("description"):
-            logger.info(f"📝 Description (100 premiers chars): {result['description'][:100]}...")
-        if result.get("synthesis"):
-            logger.info(f"📝 Synthèse (100 premiers chars): {result['synthesis'][:100]}...")
-        
-        return JSONResponse(content=result)
-    except Exception as e:
-        logger.error(f"❌ Erreur upload: {e}")
-        raise HTTPException(500, str(e))
+    return JSONResponse(content={
+        "filename": file.filename,
+        "type": file.content_type,
+        "description": "Upload temporairement désactivé - modèles IA non chargés",
+        "synthesis": "Fonctionnalité disponible une fois les modèles réactivés",
+        "documents": []
+    })
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
@@ -1043,112 +1060,73 @@ async def chat(request: ChatRequest):
     L'agent utilise FAISS pour rechercher le contexte pertinent
     et génère une réponse intelligente.
     """
-    try:
-        # Générer un ID de conversation si non fourni
-        conv_id = request.conversation_id or f"conv_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
-        
-        response = chat_manager.chat(
-            message=request.message,
-            conversation_id=conv_id,
-            use_memory=request.use_memory,
-            temperature=request.temperature
-        )
-        
-        return response
-    except Exception as e:
-        logger.error(f"❌ Erreur chat: {e}")
-        raise HTTPException(500, str(e))
+    # Générer un ID de conversation si non fourni
+    conv_id = request.conversation_id or f"conv_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    
+    # Réponse par défaut
+    response_text = f"Bonjour ! Je suis Kibali, votre assistant IA. Les modèles avancés sont temporairement désactivés pour les tests, mais je peux confirmer que votre message a été reçu : '{request.message}'"
+    
+    return ChatResponse(
+        response=response_text,
+        conversation_id=conv_id,
+        sources=None,
+        reasoning="Mode Basique (sans LLM)",
+        timestamp=datetime.now().isoformat()
+    )
 
 @app.get("/conversation/{conv_id}")
 async def get_conversation(conv_id: str):
     """Récupérer l'historique d'une conversation"""
-    history = chat_manager.memory.get_conversation(conv_id)
     return {
         "conversation_id": conv_id,
-        "messages": [msg.dict() for msg in history],
-        "total": len(history)
+        "messages": [],
+        "total": 0,
+        "note": "Historique temporairement désactivé - modèles IA non chargés"
     }
 
 @app.post("/search")
 async def search_memory(query: str, k: int = 10):
     """Rechercher dans la mémoire vectorielle"""
-    results = chat_manager.memory.search(query, k)
     return {
         "query": query,
-        "results": results,
-        "total": len(results)
+        "results": [],
+        "total": 0,
+        "note": "Recherche temporairement désactivée - modèles IA non chargés"
     }
 
 @app.get("/stats")
 async def get_stats():
     """Statistiques de la mémoire avec détails RAG PDF"""
-    # Compter les types de documents
-    pdf_chunks = 0
-    pdf_files = set()
-    images = 0
-    other_docs = 0
-    
-    for doc in chat_manager.memory.documents:
-        doc_type = doc.get("type", "")
-        if doc_type in ["pdf_rag", "pdf_chunk"]:
-            pdf_chunks += 1
-            metadata = doc.get("metadata", {})
-            filename = metadata.get("filename", "")
-            if filename:
-                pdf_files.add(filename)
-        elif doc_type in ["image", "pdf_image"]:
-            images += 1
-        else:
-            other_docs += 1
-    
     return {
-        "total_documents": len(chat_manager.memory.documents),
-        "total_vectors": chat_manager.memory.index.ntotal,
-        "conversations": len(chat_manager.memory.conversations),
-        "embedding_dimension": chat_manager.memory.dimension,
+        "total_documents": 0,
+        "total_vectors": 0,
+        "conversations": 0,
+        "embedding_dimension": 384,
         "rag_statistics": {
-            "pdf_chunks": pdf_chunks,
-            "unique_pdfs": len(pdf_files),
-            "pdf_files": list(pdf_files),
-            "images": images,
-            "other_documents": other_docs
-        }
+            "pdf_chunks": 0,
+            "unique_pdfs": 0,
+            "pdf_files": [],
+            "images": 0,
+            "other_documents": 0
+        },
+        "note": "Statistiques temporairement désactivées - modèles IA non chargés"
     }
 
 @app.delete("/clear")
 async def clear_memory():
     """Effacer toute la mémoire"""
-    chat_manager.memory = FAISSMemoryManager()
-    return {"status": "memory cleared"}
+    return {"status": "memory cleared", "note": "Mémoire temporairement désactivée - modèles IA non chargés"}
 
 @app.get("/pdf/{filename}")
 async def get_pdf_details(filename: str):
     """Obtenir les détails d'un PDF spécifique"""
-    chunks = []
-    total_chars = 0
-    
-    for i, doc in enumerate(chat_manager.memory.documents):
-        metadata = doc.get("metadata", {})
-        if metadata.get("filename") == filename:
-            doc_type = doc.get("type", "")
-            if doc_type in ["pdf_rag", "pdf_chunk"]:
-                chunks.append({
-                    "chunk_index": metadata.get("chunk_index", i),
-                    "chunk_size": metadata.get("chunk_size", len(doc.get("text", ""))),
-                    "preview": doc.get("text", "")[:200] + "...",
-                    "doc_id": doc.get("id")
-                })
-                total_chars += len(doc.get("text", ""))
-    
-    if not chunks:
-        raise HTTPException(404, f"PDF '{filename}' non trouvé dans la base")
-    
     return {
         "filename": filename,
-        "total_chunks": len(chunks),
-        "total_characters": total_chars,
-        "average_chunk_size": total_chars // len(chunks) if chunks else 0,
-        "chunks": sorted(chunks, key=lambda x: x.get("chunk_index", 0))
+        "total_chunks": 0,
+        "total_characters": 0,
+        "average_chunk_size": 0,
+        "chunks": [],
+        "note": "Détails PDF temporairement désactivés - modèles IA non chargés"
     }
 
 # ==========================================
