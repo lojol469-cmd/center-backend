@@ -260,6 +260,7 @@ const userSchema = new mongoose.Schema({
   status: { type: String, enum: ['active', 'blocked', 'admin'], default: 'active' },
   accessLevel: { type: Number, enum: [0, 1, 2], default: 0 }, // ✅ AJOUTÉ - Niveau d'accès (0: Basique, 1: Chat Utilisateurs, 2: Chat IA)
   aiChatAccess: { type: Boolean, default: false }, // ✅ AJOUTÉ - Accès au chat IA
+  messageAccess: { type: Boolean, default: true }, // ✅ AJOUTÉ - Accès à la messagerie
   otp: { type: String },
   otpExpires: { type: Date },
   savedPublications: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Publication' }],
@@ -3313,7 +3314,7 @@ app.get('/api/users', verifyToken, async (req, res) => {
       _id: { $ne: req.user.userId }, // Exclure l'utilisateur actuel
       status: { $in: ['active', 'admin', 'blocked'] }
     })
-    .select('name email profileImage status accessLevel aiChatAccess')
+    .select('name email profileImage status accessLevel aiChatAccess messageAccess')
     .sort({ name: 1 });
 
     const usersData = users.map(user => ({
@@ -3323,7 +3324,8 @@ app.get('/api/users', verifyToken, async (req, res) => {
       profileImage: user.profileImage,
       status: user.status,
       accessLevel: user.accessLevel || 0,
-      aiChatAccess: user.aiChatAccess || false
+      aiChatAccess: user.aiChatAccess || false,
+      messageAccess: user.messageAccess || false
     }));
 
     console.log(`✅ ${usersData.length} utilisateurs trouvés pour tous les utilisateurs authentifiés`);
@@ -3458,6 +3460,49 @@ app.put('/api/users/:id/ai-chat-access', verifyToken, verifyCanManageUsers, asyn
     });
   } catch (error) {
     console.error('❌ Erreur lors de la bascule accès chat IA:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+});
+
+app.put('/api/users/:id/message-access', verifyToken, verifyCanManageUsers, async (req, res) => {
+  console.log('\n=== BASCULE ACCÈS MESSAGERIE ===');
+  console.log('User ID:', req.params.id);
+  console.log('Token User ID:', req.user.userId);
+
+  try {
+    console.log('🔍 Recherche de l\'utilisateur...');
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      console.log('❌ Utilisateur non trouvé:', req.params.id);
+      return res.status(404).json({ message: 'Utilisateur non trouvé' });
+    }
+
+    console.log('✅ Utilisateur trouvé:', user.name, user.email);
+
+    const mainAdmin = ['nyundumathryme@gmail', 'nyundumathryme@gmail.com'].includes(user.email.toLowerCase());
+    if (mainAdmin) {
+      console.log('🚫 Tentative de modification de l\'admin principal');
+      return res.status(403).json({ message: 'Impossible de modifier l\'admin principal' });
+    }
+
+    // Basculer l'accès à la messagerie
+    const newMessageAccess = !user.messageAccess;
+    console.log('🔄 Bascule accès messagerie:', user.messageAccess, '→', newMessageAccess);
+    user.messageAccess = newMessageAccess;
+    await user.save();
+
+    console.log('✅ Accès messagerie mis à jour avec succès');
+    res.json({
+      message: `Accès messagerie ${newMessageAccess ? 'activé' : 'désactivé'}`,
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        messageAccess: user.messageAccess
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur lors de la bascule accès messagerie:', error);
     res.status(500).json({ message: 'Erreur serveur', error: error.message });
   }
 });
