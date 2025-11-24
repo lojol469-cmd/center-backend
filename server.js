@@ -258,6 +258,8 @@ const userSchema = new mongoose.Schema({
   cloudinaryPublicId: { type: String, default: '' }, // Pour supprimer l'image de Cloudinary
   isVerified: { type: Boolean, default: false },
   status: { type: String, enum: ['active', 'blocked', 'admin'], default: 'active' },
+  accessLevel: { type: Number, enum: [0, 1, 2], default: 0 }, // ✅ AJOUTÉ - Niveau d'accès (0: Basique, 1: Chat Utilisateurs, 2: Chat IA)
+  aiChatAccess: { type: Boolean, default: false }, // ✅ AJOUTÉ - Accès au chat IA
   otp: { type: String },
   otpExpires: { type: Date },
   savedPublications: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Publication' }],
@@ -510,7 +512,7 @@ const verifyToken = (req, res, next) => {
   console.log('Token reçu (premiers 20 caractères):', token.substring(0, 20) + '...');
   console.log('JWT_SECRET défini:', !!process.env.JWT_SECRET);
 
-  jwt.verify(token, process.env.JWT_SECRET, (err, user) => {
+  jwt.verify(token, process.env.JWT_SECRET, async (err, user) => {
     if (err) {
       console.log('❌ Erreur JWT:', err.message);
       console.log('Type erreur:', err.name);
@@ -522,9 +524,29 @@ const verifyToken = (req, res, next) => {
       }
       return res.status(403).json({ message: 'Token invalide' });
     }
+    
     console.log('✅ Token valide pour userId:', user.userId, 'email:', user.email);
-    req.user = user;
-    next();
+    
+    // Vérifier le statut de l'utilisateur
+    try {
+      const dbUser = await User.findById(user.userId);
+      if (!dbUser) {
+        console.log('❌ Utilisateur non trouvé en base');
+        return res.status(401).json({ message: 'Utilisateur non trouvé' });
+      }
+      
+      if (dbUser.status === 'blocked') {
+        console.log('❌ Utilisateur bloqué:', user.email);
+        return res.status(403).json({ message: 'Accès refusé - Compte désactivé' });
+      }
+      
+      console.log('✅ Statut utilisateur valide:', dbUser.status);
+      req.user = user;
+      next();
+    } catch (dbErr) {
+      console.log('❌ Erreur vérification statut utilisateur:', dbErr.message);
+      return res.status(500).json({ message: 'Erreur serveur' });
+    }
   });
 };
 
@@ -626,6 +648,12 @@ app.post('/api/auth/verify-otp', async (req, res) => {
     return res.status(400).json({ message: 'Utilisateur non trouvé' });
   }
 
+  // Vérifier le statut de l'utilisateur
+  if (user.status === 'blocked') {
+    console.log('❌ Utilisateur bloqué:', email);
+    return res.status(403).json({ message: 'Accès refusé - Compte désactivé' });
+  }
+
   console.log('OTP stocké:', user.otp);
   console.log('OTP expire à:', user.otpExpires);
   console.log('Date actuelle:', new Date());
@@ -694,6 +722,12 @@ app.post('/api/auth/refresh-token', (req, res) => {
       return res.status(404).json({ message: 'Utilisateur non trouvé' });
     }
 
+    // Vérifier le statut de l'utilisateur
+    if (user.status === 'blocked') {
+      console.log('❌ Utilisateur bloqué:', user.email);
+      return res.status(403).json({ message: 'Accès refusé - Compte désactivé' });
+    }
+
     // Token valide pendant 7 jours
     const newAccessToken = jwt.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
     console.log('✅ Nouveau access token généré (premiers 30 car):', newAccessToken.substring(0, 30) + '...');
@@ -710,6 +744,12 @@ app.post('/api/auth/admin-login', async (req, res) => {
     
     if (!user) {
       return res.status(400).json({ message: 'Utilisateur non trouvé' });
+    }
+
+    // Vérifier le statut de l'utilisateur
+    if (user.status === 'blocked') {
+      console.log('❌ Utilisateur bloqué:', email);
+      return res.status(403).json({ message: 'Accès refusé - Compte désactivé' });
     }
 
     // Vérifier le mot de passe avec bcrypt
@@ -3268,12 +3308,12 @@ app.get('/api/users', verifyToken, async (req, res) => {
     console.log('\n=== RÉCUPÉRATION TOUS LES UTILISATEURS ===');
     console.log('User ID:', req.user.userId);
 
-    // Récupérer tous les utilisateurs actifs et admins (sauf l'utilisateur actuel)
+    // Récupérer tous les utilisateurs actifs, admins et bloqués (pour permettre la réactivation)
     const users = await User.find({
       _id: { $ne: req.user.userId }, // Exclure l'utilisateur actuel
-      status: { $in: ['active', 'admin'] }
+      status: { $in: ['active', 'admin', 'blocked'] }
     })
-    .select('name email profileImage status')
+    .select('name email profileImage status accessLevel aiChatAccess')
     .sort({ name: 1 });
 
     const usersData = users.map(user => ({
@@ -3281,7 +3321,9 @@ app.get('/api/users', verifyToken, async (req, res) => {
       name: user.name || user.email.split('@')[0], // Utiliser le nom ou la partie avant @ de l'email
       email: user.email,
       profileImage: user.profileImage,
-      status: user.status
+      status: user.status,
+      accessLevel: user.accessLevel || 0,
+      aiChatAccess: user.aiChatAccess || false
     }));
 
     console.log(`✅ ${usersData.length} utilisateurs trouvés pour tous les utilisateurs authentifiés`);
@@ -3373,6 +3415,49 @@ app.put('/api/users/:id/access-level', verifyToken, verifyCanManageUsers, async 
     res.json({ message: 'Niveau d\'accès mis à jour', user });
   } catch (error) {
     console.error('❌ Erreur lors de la mise à jour du niveau d\'accès:', error);
+    res.status(500).json({ message: 'Erreur serveur', error: error.message });
+  }
+});
+
+app.put('/api/users/:id/ai-chat-access', verifyToken, verifyCanManageUsers, async (req, res) => {
+  console.log('\n=== BASCULE ACCÈS CHAT IA ===');
+  console.log('User ID:', req.params.id);
+  console.log('Token User ID:', req.user.userId);
+
+  try {
+    console.log('🔍 Recherche de l\'utilisateur...');
+    const user = await User.findById(req.params.id);
+    if (!user) {
+      console.log('❌ Utilisateur non trouvé:', req.params.id);
+      return res.status(404).json({ message: 'Utilisateur non trouvé' });
+    }
+
+    console.log('✅ Utilisateur trouvé:', user.name, user.email);
+
+    const mainAdmin = ['nyundumathryme@gmail', 'nyundumathryme@gmail.com'].includes(user.email.toLowerCase());
+    if (mainAdmin) {
+      console.log('🚫 Tentative de modification de l\'admin principal');
+      return res.status(403).json({ message: 'Impossible de modifier l\'admin principal' });
+    }
+
+    // Basculer l'accès au chat IA
+    const newAiChatAccess = !user.aiChatAccess;
+    console.log('🔄 Bascule accès chat IA:', user.aiChatAccess, '→', newAiChatAccess);
+    user.aiChatAccess = newAiChatAccess;
+    await user.save();
+
+    console.log('✅ Accès chat IA mis à jour avec succès');
+    res.json({ 
+      message: `Accès chat IA ${newAiChatAccess ? 'activé' : 'désactivé'}`, 
+      user: {
+        _id: user._id,
+        name: user.name,
+        email: user.email,
+        aiChatAccess: user.aiChatAccess
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur lors de la bascule accès chat IA:', error);
     res.status(500).json({ message: 'Erreur serveur', error: error.message });
   }
 });
@@ -4236,6 +4321,62 @@ app.get('/api/stories/:id/views', verifyToken, async (req, res) => {
     console.error('Erreur récupération vues story:', err);
     res.status(500).json({ 
       message: 'Erreur lors de la récupération des vues',
+      error: err.message 
+    });
+  }
+});
+
+// Supprimer une story
+app.delete('/api/stories/:id', verifyToken, async (req, res) => {
+  try {
+    console.log('\n=== SUPPRESSION STORY ===');
+    console.log('Story ID:', req.params.id);
+    console.log('User ID:', req.user.userId);
+
+    const story = await Story.findById(req.params.id);
+    
+    if (!story) {
+      return res.status(404).json({ message: 'Story non trouvée' });
+    }
+
+    // Vérifier que c'est l'auteur de la story
+    if (story.userId.toString() !== req.user.userId) {
+      return res.status(403).json({ 
+        message: 'Seul l\'auteur peut supprimer sa story' 
+      });
+    }
+
+    // Supprimer le média de Cloudinary si présent
+    if (story.cloudinaryPublicId) {
+      try {
+        console.log('🗑️ Suppression du média Cloudinary:', story.cloudinaryPublicId);
+        await deleteFromCloudinary(story.cloudinaryPublicId);
+        console.log('✅ Média supprimé de Cloudinary');
+      } catch (cloudinaryError) {
+        console.error('❌ Erreur suppression Cloudinary:', cloudinaryError);
+        // Ne pas bloquer la suppression de la story si Cloudinary échoue
+      }
+    }
+
+    // Supprimer la story de la base de données
+    await Story.findByIdAndDelete(req.params.id);
+    console.log('✅ Story supprimée de la base de données');
+
+    // Notifier via WebSocket que la story a été supprimée
+    broadcastToAll({
+      type: 'story_deleted',
+      storyId: req.params.id,
+      userId: req.user.userId
+    });
+
+    res.json({
+      success: true,
+      message: 'Story supprimée avec succès'
+    });
+  } catch (err) {
+    console.error('Erreur suppression story:', err);
+    res.status(500).json({ 
+      message: 'Erreur lors de la suppression de la story',
       error: err.message 
     });
   }
