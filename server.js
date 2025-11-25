@@ -436,6 +436,78 @@ storySchema.index({ expiresAt: 1 }, { expireAfterSeconds: 0 });
 const Story = mongoose.model('Story', storySchema);
 
 // ========================================
+// MODÈLE : CARTE D'IDENTITÉ VIRTUELLE (BIOMÉTRIQUE)
+// ========================================
+
+const virtualIDCardSchema = new mongoose.Schema({
+  userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
+  cardData: {
+    firstName: { type: String, required: true },
+    lastName: { type: String, required: true },
+    dateOfBirth: { type: Date, required: true },
+    placeOfBirth: { type: String, required: true },
+    nationality: { type: String, required: true },
+    address: { type: String, required: true },
+    idNumber: { type: String, required: true, unique: true },
+    issueDate: { type: Date, required: true },
+    expiryDate: { type: Date, required: true },
+    gender: { type: String, enum: ['M', 'F'], required: true },
+    bloodType: { type: String, enum: ['A+', 'A-', 'B+', 'B-', 'AB+', 'AB-', 'O+', 'O-'] },
+    height: { type: Number }, // en cm
+    profession: { type: String },
+    maritalStatus: { type: String, enum: ['single', 'married', 'divorced', 'widowed'] },
+    phoneNumber: { type: String },
+    emergencyContact: {
+      name: { type: String },
+      phone: { type: String },
+      relationship: { type: String }
+    }
+  },
+  biometricData: {
+    fingerprintHash: { type: String }, // Hash de l'empreinte digitale
+    faceData: { type: String }, // Données de reconnaissance faciale (encodées)
+    irisData: { type: String }, // Données iris (optionnel)
+    voiceData: { type: String }, // Données vocales (optionnel)
+    lastBiometricUpdate: { type: Date, default: Date.now }
+  },
+  cardImage: {
+    frontImage: { type: String }, // URL Cloudinary de l'image avant
+    backImage: { type: String }, // URL Cloudinary de l'image arrière
+    frontImagePublicId: { type: String },
+    backImagePublicId: { type: String }
+  },
+  securityFeatures: {
+    qrCode: { type: String }, // Données pour QR code
+    barcode: { type: String }, // Données pour code-barres
+    hologramData: { type: String }, // Données d'hologramme
+    chipData: { type: String } // Données de puce électronique simulée
+  },
+  authenticationTokens: [{
+    token: { type: String, required: true },
+    deviceId: { type: String },
+    biometricType: { type: String, enum: ['fingerprint', 'face', 'iris', 'voice'] },
+    createdAt: { type: Date, default: Date.now },
+    expiresAt: { type: Date, required: true },
+    isActive: { type: Boolean, default: true }
+  }],
+  isActive: { type: Boolean, default: true },
+  verificationStatus: { type: String, enum: ['pending', 'verified', 'rejected'], default: 'pending' },
+  verificationNotes: { type: String },
+  lastUsed: { type: Date },
+  usageCount: { type: Number, default: 0 },
+  createdAt: { type: Date, default: Date.now },
+  updatedAt: { type: Date, default: Date.now }
+});
+
+// Index pour optimiser les recherches
+virtualIDCardSchema.index({ 'cardData.idNumber': 1 });
+virtualIDCardSchema.index({ userId: 1 });
+virtualIDCardSchema.index({ 'authenticationTokens.token': 1 });
+virtualIDCardSchema.index({ 'authenticationTokens.expiresAt': 1 });
+
+const VirtualIDCard = mongoose.model('VirtualIDCard', virtualIDCardSchema);
+
+// ========================================
 // UPLOADS CLOUDINARY - Déjà importés
 // ========================================
 // uploadCloudinary, publicationUpload, storyUpload, commentUpload, 
@@ -961,9 +1033,13 @@ async function sendEmailNotification(userEmail, subject, htmlContent) {
 
 // Initialiser les fonctions de notification et les modèles dans le controller
 const publicationController = require('./controllers/publicationController');
+const virtualIDCardController = require('./controllers/virtualIDCardController');
 publicationController.initModels(Publication, User, Notification);
 publicationController.initNotifications(sendPushNotification, sendEmailNotification, BASE_URL);
 publicationController.initWebSocket(broadcastToAll);
+
+// Initialiser le contrôleur de cartes d'identité virtuelles
+virtualIDCardController.initModels(VirtualIDCard, User);
 
 // Envoyer une notification à un utilisateur
 app.post('/api/notifications/send', verifyToken, async (req, res) => {
@@ -3596,6 +3672,13 @@ app.post('/api/admin/fix-employee-names', verifyToken, async (req, res) => {
     });
   }
 });
+
+// ========================================
+// ROUTES : CARTES D'IDENTITÉ VIRTUELLES
+// ========================================
+
+const virtualIDCardRoutes = require('./routes/virtualIDCard');
+app.use('/api/virtual-id-cards', virtualIDCardRoutes);
 
 const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0';
