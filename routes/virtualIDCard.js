@@ -4,9 +4,8 @@
 
 const express = require('express');
 const router = express.Router();
-const path = require('path');
 const virtualIDCardController = require('../controllers/virtualIDCardController');
-const { verifyToken } = require(path.join(__dirname, '../middleware/auth'));
+const { verifyToken } = require('../middleware/auth');
 const { employeeUpload } = require('../cloudynary');
 
 // Routes pour les cartes d'identité virtuelles

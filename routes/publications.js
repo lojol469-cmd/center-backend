@@ -6,7 +6,7 @@ const express = require('express');
 const router = express.Router();
 const publicationController = require('../controllers/publicationController');
 const { verifyToken } = require('../middleware/auth');
-const { publicationUpload } = require('../middleware/upload');
+const { publicationUpload } = require('../cloudynary');
 
 // Routes publications
 router.get('/', verifyToken, publicationController.getPublications);
