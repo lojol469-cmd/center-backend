@@ -22,6 +22,7 @@ RUN npm install --omit=dev && \
 # Copier le code source (uniquement Node.js)
 COPY server.js ./
 COPY cloudynary.js ./
+COPY middleware/ ./middleware/
 COPY routes/ ./routes/
 COPY controllers/ ./controllers/
 
