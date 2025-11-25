@@ -500,8 +500,7 @@ const virtualIDCardSchema = new mongoose.Schema({
 });
 
 // Index pour optimiser les recherches
-virtualIDCardSchema.index({ 'cardData.idNumber': 1 });
-virtualIDCardSchema.index({ userId: 1 });
+// Note: Les index pour userId et cardData.idNumber sont déjà créés automatiquement par unique: true
 virtualIDCardSchema.index({ 'authenticationTokens.token': 1 });
 virtualIDCardSchema.index({ 'authenticationTokens.expiresAt': 1 });
 
