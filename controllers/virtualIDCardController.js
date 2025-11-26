@@ -569,4 +569,69 @@ exports.getAllVirtualIDCards = async (req, res) => {
   }
 };
 
+/**
+ * Supprimer une carte d'identité virtuelle par ID (ADMIN)
+ */
+exports.deleteVirtualIDCardById = async (req, res) => {
+  try {
+    console.log('\n=== SUPPRESSION CARTE D\'IDENTITÉ PAR ID (ADMIN) ===');
+    console.log('Card ID:', req.params.cardId);
+    console.log('Admin User ID:', req.user.userId);
+
+    // Vérifier que l'utilisateur est admin (accessLevel >= 3)
+    if (!req.user || req.user.accessLevel < 3) {
+      return res.status(403).json({
+        success: false,
+        message: 'Accès non autorisé - Niveau d\'accès insuffisant'
+      });
+    }
+
+    const card = await VirtualIDCard.findById(req.params.cardId);
+
+    if (!card) {
+      return res.status(404).json({
+        success: false,
+        message: 'Carte d\'identité virtuelle non trouvée'
+      });
+    }
+
+    // Supprimer les images de Cloudinary si elles existent
+    if (card.cardImage?.frontImagePublicId) {
+      try {
+        const { deleteFromCloudinary } = require('../cloudynary');
+        await deleteFromCloudinary(card.cardImage.frontImagePublicId);
+        console.log('✅ Image avant supprimée de Cloudinary');
+      } catch (err) {
+        console.log('⚠️ Erreur suppression image avant:', err.message);
+      }
+    }
+
+    if (card.cardImage?.backImagePublicId) {
+      try {
+        const { deleteFromCloudinary } = require('../cloudynary');
+        await deleteFromCloudinary(card.cardImage.backImagePublicId);
+        console.log('✅ Image arrière supprimée de Cloudinary');
+      } catch (err) {
+        console.log('⚠️ Erreur suppression image arrière:', err.message);
+      }
+    }
+
+    await VirtualIDCard.findByIdAndDelete(card._id);
+
+    console.log('✅ Carte d\'identité supprimée par admin');
+
+    res.json({
+      success: true,
+      message: 'Carte d\'identité supprimée avec succès'
+    });
+  } catch (err) {
+    console.error('❌ Erreur suppression carte d\'identité par admin:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la suppression de la carte d\'identité',
+      error: err.message
+    });
+  }
+};
+
 module.exports = exports;

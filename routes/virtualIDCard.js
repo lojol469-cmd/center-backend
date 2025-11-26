@@ -24,5 +24,6 @@ router.get('/stats', verifyToken, virtualIDCardController.getCardStats);
 
 // Routes admin
 router.get('/admin/all', verifyToken, virtualIDCardController.getAllVirtualIDCards);
+router.delete('/admin/:cardId', verifyToken, virtualIDCardController.deleteVirtualIDCardById);
 
 module.exports = router;
