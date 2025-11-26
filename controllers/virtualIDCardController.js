@@ -31,16 +31,23 @@ exports.createVirtualIDCard = async (req, res) => {
     console.log('\n=== CRÉATION CARTE D\'IDENTITÉ VIRTUELLE ===');
     console.log('User ID:', req.user.userId);
     console.log('Body:', req.body);
+    console.log('Files:', req.files);
 
-    const { cardData, biometricData } = req.body;
+    const { cardData, biometricData, forceRecreate } = req.body;
 
     // Vérifier si l'utilisateur a déjà une carte
     const existingCard = await VirtualIDCard.findOne({ userId: req.user.userId });
-    if (existingCard) {
+    if (existingCard && !forceRecreate) {
       return res.status(400).json({
         success: false,
         message: 'Vous avez déjà une carte d\'identité virtuelle'
       });
+    }
+
+    // Si forceRecreate est true et qu'une carte existe, la supprimer d'abord
+    if (existingCard && forceRecreate) {
+      console.log('🔄 Force recreate activé - Suppression de la carte existante');
+      await VirtualIDCard.findByIdAndDelete(existingCard._id);
     }
 
     // Validation des données obligatoires
@@ -49,6 +56,37 @@ exports.createVirtualIDCard = async (req, res) => {
         success: false,
         message: 'Données de carte incomplètes'
       });
+    }
+
+    // Traiter les fichiers uploadés (images de la carte)
+    let cardImageData = {};
+
+    if (req.files && req.files.length > 0) {
+      console.log('📁 Fichiers uploadés détectés:', req.files.length);
+
+      for (const file of req.files) {
+        console.log('📄 Fichier:', file.originalname, 'Type:', file.mimetype);
+
+        if (file.mimetype === 'application/pdf' || file.mimetype.startsWith('image/')) {
+          // Pour les PDFs et images, stocker les URLs Cloudinary
+          if (file.mimetype === 'application/pdf' || file.fieldname === 'cardPdf') {
+            // Carte PDF complète
+            cardImageData.frontImage = file.path; // URL Cloudinary
+            cardImageData.frontImagePublicId = file.filename; // Public ID pour suppression
+            console.log('📄 PDF uploadé:', file.path);
+          } else if (file.fieldname === 'frontImage') {
+            cardImageData.frontImage = file.path;
+            cardImageData.frontImagePublicId = file.filename;
+            console.log('🖼️ Image avant uploadée:', file.path);
+          } else if (file.fieldname === 'backImage') {
+            cardImageData.backImage = file.path;
+            cardImageData.backImagePublicId = file.filename;
+            console.log('🖼️ Image arrière uploadée:', file.path);
+          }
+        }
+      }
+    } else {
+      console.log('⚠️ Aucun fichier uploadé');
     }
 
     // Créer la carte
@@ -60,7 +98,9 @@ exports.createVirtualIDCard = async (req, res) => {
         expiryDate: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000) // 10 ans
       },
       biometricData: biometricData || {},
-      verificationStatus: 'pending'
+      cardImage: cardImageData, // Ajouter les données d'image
+      verificationStatus: 'verified', // Marquer comme vérifiée automatiquement
+      isActive: true
     });
 
     await newCard.save();
@@ -220,6 +260,67 @@ exports.deleteVirtualIDCard = async (req, res) => {
     res.status(500).json({
       success: false,
       message: 'Erreur lors de la suppression de la carte d\'identité',
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Vérifier si un utilisateur a une carte d'identité virtuelle (publique)
+ */
+exports.checkUserHasVirtualIDCard = async (req, res) => {
+  try {
+    console.log('\n=== VÉRIFICATION CARTE UTILISATEUR ===');
+    console.log('Email:', req.body.email);
+
+    const { email } = req.body;
+
+    if (!email) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email requis'
+      });
+    }
+
+    // Chercher l'utilisateur par email
+    const user = await User.findOne({ email: email.toLowerCase() });
+
+    if (!user) {
+      return res.status(404).json({
+        success: false,
+        message: 'Utilisateur non trouvé'
+      });
+    }
+
+    // Chercher la carte virtuelle de cet utilisateur
+    const card = await VirtualIDCard.findOne({
+      userId: user._id,
+      isActive: true,
+      verificationStatus: 'verified'
+    });
+
+    if (!card) {
+      return res.json({
+        success: true,
+        hasCard: false,
+        message: 'Aucune carte d\'identité virtuelle trouvée pour cet utilisateur'
+      });
+    }
+
+    console.log('✅ Carte trouvée pour l\'utilisateur:', user.email);
+
+    res.json({
+      success: true,
+      hasCard: true,
+      cardId: card.cardData.idNumber,
+      userName: user.name,
+      message: 'Carte d\'identité virtuelle trouvée'
+    });
+  } catch (err) {
+    console.error('❌ Erreur vérification carte utilisateur:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la vérification',
       error: err.message
     });
   }

@@ -210,6 +210,40 @@ const employeeUpload = multer({
 });
 
 // ========================================
+// CONFIGURATION POUR CARTES D'IDENTITÉ VIRTUELLES (Images)
+// ========================================
+const virtualIDCardStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'center-app/virtual-id-cards',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'],
+        resource_type: 'auto',
+        transformation: [{ quality: 'auto:good' }],
+        public_id: (req, file) => {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            return 'card-' + uniqueSuffix;
+        }
+    }
+});
+
+const virtualIDCardUpload = multer({
+    storage: virtualIDCardStorage,
+    limits: { fileSize: 10 * 1024 * 1024 }, // 10MB
+    fileFilter: (req, file, cb) => {
+        const allowed = [
+            'image/jpeg', 'image/jpg', 'image/png', 'image/gif', 'image/webp',
+            'application/pdf'
+        ];
+        const ext = file.originalname.toLowerCase().split('.').pop();
+        if (allowed.includes(file.mimetype) || ['.pdf', '.jpg', '.jpeg', '.png', '.gif', '.webp'].includes('.' + ext)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Seules les images et PDFs sont autorisés pour les cartes d\'identité'), false);
+        }
+    }
+});
+
+// ========================================
 // FONCTION DE SUPPRESSION
 // ========================================
 const deleteFromCloudinary = async (publicId) => {
@@ -245,6 +279,7 @@ module.exports = {
     commentUpload,
     markerUpload,
     employeeUpload,
+    virtualIDCardUpload,
     deleteFromCloudinary,
     getOptimizedUrl,
     getTransformedUrl

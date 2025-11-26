@@ -816,7 +816,7 @@ app.post('/api/auth/verify-id-card', async (req, res) => {
   
   try {
     // Chercher dans la collection VirtualIDCard
-    const virtualCard = await VirtualIDCard.findOne({ cardNumber: idCard });
+    const virtualCard = await VirtualIDCard.findOne({ 'cardData.idNumber': idCard });
     
     if (!virtualCard) {
       console.log('❌ Carte d\'identité non trouvée');
@@ -827,10 +827,10 @@ app.post('/api/auth/verify-id-card', async (req, res) => {
       });
     }
 
-    console.log('✅ Carte d\'identité trouvée:', virtualCard.email);
+    console.log('✅ Carte d\'identité trouvée:', virtualCard.cardData.email);
     
     // Vérifier si un utilisateur existe déjà avec cet email
-    const existingUser = await User.findOne({ email: virtualCard.email });
+    const existingUser = await User.findOne({ email: virtualCard.cardData.email });
     
     if (existingUser) {
       console.log('⚠️ Un compte existe déjà avec cet email');
@@ -845,21 +845,19 @@ app.post('/api/auth/verify-id-card', async (req, res) => {
       success: true, 
       exists: true,
       user: {
-        email: virtualCard.email,
-        name: virtualCard.name,
-        idCard: virtualCard.cardNumber
+        email: virtualCard.cardData.email,
+        name: virtualCard.cardData.firstName + ' ' + virtualCard.cardData.lastName,
+        idCard: virtualCard.cardData.idNumber
       }
     });
   } catch (error) {
     console.error('❌ Erreur vérification carte:', error);
     res.status(500).json({ 
-      success: false, 
+      success: false,
       message: 'Erreur serveur lors de la vérification' 
     });
   }
-});
-
-// Inscription avec Face ID et carte d'identité
+});// Inscription avec Face ID et carte d'identité
 app.post('/api/auth/register-faceid', async (req, res) => {
   console.log('\n=== INSCRIPTION FACE ID ===');
   const { email, name, idCard } = req.body;
@@ -869,7 +867,7 @@ app.post('/api/auth/register-faceid', async (req, res) => {
 
   try {
     // Vérifier que la carte existe
-    const virtualCard = await VirtualIDCard.findOne({ cardNumber: idCard });
+    const virtualCard = await VirtualIDCard.findOne({ 'cardData.idNumber': idCard });
     
     if (!virtualCard) {
       console.log('❌ Carte d\'identité non trouvée');
@@ -880,7 +878,7 @@ app.post('/api/auth/register-faceid', async (req, res) => {
     }
 
     // Vérifier que l'email correspond
-    if (virtualCard.email !== email) {
+    if (virtualCard.cardData.email !== email) {
       console.log('❌ Email ne correspond pas à la carte');
       return res.status(400).json({ 
         success: false,
@@ -913,7 +911,7 @@ app.post('/api/auth/register-faceid', async (req, res) => {
       otp,
       otpExpires: Date.now() + 10 * 60 * 1000, // 10 minutes
       isVerified: false,
-      profileImage: virtualCard.profileImage || null,
+      profileImage: virtualCard.cardImage?.frontImage || null,
       role: 'user',
       status: 'active'
     });
@@ -953,7 +951,7 @@ app.post('/api/auth/login-faceid', async (req, res) => {
 
   try {
     // Vérifier que la carte existe
-    const virtualCard = await VirtualIDCard.findOne({ cardNumber: idCard });
+    const virtualCard = await VirtualIDCard.findOne({ 'cardData.idNumber': idCard });
     
     if (!virtualCard) {
       console.log('❌ Carte d\'identité non trouvée');
@@ -964,7 +962,7 @@ app.post('/api/auth/login-faceid', async (req, res) => {
     }
 
     // Vérifier que l'utilisateur existe
-    const user = await User.findOne({ email: virtualCard.email });
+    const user = await User.findOne({ email: virtualCard.cardData.email });
     
     if (!user) {
       console.log('❌ Utilisateur non trouvé');
