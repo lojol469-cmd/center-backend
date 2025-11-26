@@ -945,6 +945,71 @@ app.post('/api/auth/register-faceid', async (req, res) => {
   }
 });
 
+// Connexion avec Face ID et carte d'identité
+app.post('/api/auth/login-faceid', async (req, res) => {
+  console.log('\n=== CONNEXION FACE ID ===');
+  const { idCard } = req.body;
+  console.log('ID Carte:', idCard);
+
+  try {
+    // Vérifier que la carte existe
+    const virtualCard = await VirtualIDCard.findOne({ cardNumber: idCard });
+    
+    if (!virtualCard) {
+      console.log('❌ Carte d\'identité non trouvée');
+      return res.status(404).json({ 
+        success: false,
+        message: 'Carte d\'identité non trouvée' 
+      });
+    }
+
+    // Vérifier que l'utilisateur existe
+    const user = await User.findOne({ email: virtualCard.email });
+    
+    if (!user) {
+      console.log('❌ Utilisateur non trouvé');
+      return res.status(404).json({ 
+        success: false,
+        message: 'Utilisateur non trouvé. Veuillez vous inscrire d\'abord.' 
+      });
+    }
+
+    // Vérifier le statut de l'utilisateur
+    if (user.status === 'blocked') {
+      console.log('❌ Utilisateur bloqué');
+      return res.status(403).json({ 
+        success: false,
+        message: 'Accès refusé - Compte désactivé' 
+      });
+    }
+
+    // Générer les tokens
+    const accessToken = jwt.sign({ userId: user._id, email: user.email }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const refreshToken = jwt.sign({ userId: user._id }, process.env.JWT_REFRESH_SECRET, { expiresIn: '30d' });
+
+    console.log('✅ Connexion Face ID réussie pour:', user.email);
+
+    res.json({
+      success: true,
+      message: 'Connexion réussie',
+      accessToken,
+      refreshToken,
+      user: { 
+        _id: user._id.toString(),
+        email: user.email, 
+        name: user.name, 
+        profileImage: user.profileImage, 
+        status: user.status 
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur connexion Face ID:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur serveur lors de la connexion' 
+    });
+  }
+});
 
 // Route de login direct pour les tests (sans OTP)
 app.post('/api/auth/admin-login', async (req, res) => {
