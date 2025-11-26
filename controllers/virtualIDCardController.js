@@ -247,6 +247,9 @@ exports.updateVirtualIDCard = async (req, res) => {
     if (cardDataString) {
       try {
         cardData = JSON.parse(cardDataString);
+        console.log('Parsed cardData:', cardData);
+        console.log('cardData keys:', Object.keys(cardData));
+        console.log('cardData.emergencyContact:', cardData.emergencyContact);
       } catch (parseError) {
         console.log('❌ Erreur parsing cardData JSON:', parseError.message);
         return res.status(400).json({
@@ -278,7 +281,17 @@ exports.updateVirtualIDCard = async (req, res) => {
 
     // Mettre à jour les données
     if (cardData) {
-      card.cardData = { ...card.cardData, ...cardData };
+      // Créer un nouvel objet cardData en préservant les valeurs existantes
+      const updatedCardData = { ...card.cardData };
+
+      // Mettre à jour seulement les propriétés fournies
+      Object.keys(cardData).forEach(key => {
+        if (cardData[key] !== undefined) {
+          updatedCardData[key] = cardData[key];
+        }
+      });
+
+      card.cardData = updatedCardData;
     }
 
     if (biometricData) {
@@ -711,11 +724,12 @@ exports.getAllVirtualIDCards = async (req, res) => {
   try {
     console.log('\n=== RÉCUPÉRATION TOUTES LES CARTES D\'IDENTITÉ (ADMIN) ===');
 
-    // Vérifier que l'utilisateur est admin (accessLevel >= 3)
-    if (!req.user || req.user.accessLevel < 3) {
+    // Vérifier que l'utilisateur est admin (par email ou accessLevel >= 2)
+    const isAdmin = req.user.email === 'nyundumathryme@gmail.com' || (req.user.accessLevel && req.user.accessLevel >= 2);
+    if (!req.user || !isAdmin) {
       return res.status(403).json({
         success: false,
-        message: 'Accès non autorisé - Niveau d\'accès insuffisant'
+        message: 'Accès non autorisé - Droits administrateur requis'
       });
     }
 
@@ -754,7 +768,7 @@ exports.getAllVirtualIDCards = async (req, res) => {
 
     res.json({
       success: true,
-      cards: cardsWithUserInfo,
+      idCards: cardsWithUserInfo,
       total: cardsWithUserInfo.length
     });
   } catch (err) {
@@ -776,11 +790,12 @@ exports.deleteVirtualIDCardById = async (req, res) => {
     console.log('Card ID:', req.params.cardId);
     console.log('Admin User ID:', req.user.userId);
 
-    // Vérifier que l'utilisateur est admin (accessLevel >= 3)
-    if (!req.user || req.user.accessLevel < 3) {
+    // Vérifier que l'utilisateur est admin (par email ou accessLevel >= 2)
+    const isAdmin = req.user.email === 'nyundumathryme@gmail.com' || (req.user.accessLevel && req.user.accessLevel >= 2);
+    if (!req.user || !isAdmin) {
       return res.status(403).json({
         success: false,
-        message: 'Accès non autorisé - Niveau d\'accès insuffisant'
+        message: 'Accès non autorisé - Droits administrateur requis'
       });
     }
 
