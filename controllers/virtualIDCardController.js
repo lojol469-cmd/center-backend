@@ -33,7 +33,20 @@ exports.createVirtualIDCard = async (req, res) => {
     console.log('Body:', req.body);
     console.log('Files:', req.files);
 
-    const { cardData, biometricData, forceRecreate } = req.body;
+    const { cardData: cardDataString, biometricData: biometricDataString, forceRecreate } = req.body;
+
+    // Parser les données JSON
+    let cardData, biometricData;
+    try {
+      cardData = cardDataString ? JSON.parse(cardDataString) : {};
+      biometricData = biometricDataString ? JSON.parse(biometricDataString) : {};
+    } catch (parseError) {
+      console.log('❌ Erreur parsing JSON:', parseError.message);
+      return res.status(400).json({
+        success: false,
+        message: 'Données JSON invalides'
+      });
+    }
 
     // Vérifier si l'utilisateur a déjà une carte
     const existingCard = await VirtualIDCard.findOne({ userId: req.user.userId });
@@ -223,7 +236,32 @@ exports.updateVirtualIDCard = async (req, res) => {
     console.log('\n=== MISE À JOUR CARTE D\'IDENTITÉ VIRTUELLE ===');
     console.log('User ID:', req.user.userId);
 
-    const { cardData, biometricData } = req.body;
+    const { cardData: cardDataString, biometricData: biometricDataString } = req.body;
+
+    // Parser les données JSON si elles existent
+    let cardData, biometricData;
+    if (cardDataString) {
+      try {
+        cardData = JSON.parse(cardDataString);
+      } catch (parseError) {
+        console.log('❌ Erreur parsing cardData JSON:', parseError.message);
+        return res.status(400).json({
+          success: false,
+          message: 'Données cardData JSON invalides'
+        });
+      }
+    }
+    if (biometricDataString) {
+      try {
+        biometricData = JSON.parse(biometricDataString);
+      } catch (parseError) {
+        console.log('❌ Erreur parsing biometricData JSON:', parseError.message);
+        return res.status(400).json({
+          success: false,
+          message: 'Données biometricData JSON invalides'
+        });
+      }
+    }
 
     const card = await VirtualIDCard.findOne({ userId: req.user.userId });
 
