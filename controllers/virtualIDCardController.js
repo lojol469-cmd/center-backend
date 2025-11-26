@@ -59,14 +59,17 @@ exports.createVirtualIDCard = async (req, res) => {
       });
     }
 
-    // Vérifier si l'idNumber est déjà utilisé
+    // Vérifier si l'idNumber est déjà utilisé PAR UN AUTRE utilisateur
     console.log('🔍 Vérification unicité idNumber:', cardData.idNumber);
-    const existingCardById = await VirtualIDCard.findOne({ 'cardData.idNumber': cardData.idNumber });
+    const existingCardById = await VirtualIDCard.findOne({
+      'cardData.idNumber': cardData.idNumber,
+      userId: { $ne: req.user.userId } // Exclure la carte de l'utilisateur actuel
+    });
     if (existingCardById) {
-      console.log('❌ idNumber déjà utilisé:', cardData.idNumber);
+      console.log('❌ idNumber déjà utilisé par un autre utilisateur:', cardData.idNumber);
       return res.status(400).json({
         success: false,
-        message: 'Ce numéro d\'identité est déjà utilisé'
+        message: 'Ce numéro d\'identité est déjà utilisé par un autre utilisateur'
       });
     }
 
