@@ -808,6 +808,144 @@ app.post('/api/auth/refresh-token', (req, res) => {
   });
 });
 
+// Vérifier l'existence d'une carte d'identité
+app.post('/api/auth/verify-id-card', async (req, res) => {
+  console.log('\n=== VÉRIFICATION CARTE D\'IDENTITÉ ===');
+  const { idCard } = req.body;
+  console.log('ID Carte reçu:', idCard);
+  
+  try {
+    // Chercher dans la collection VirtualIDCard
+    const virtualCard = await VirtualIDCard.findOne({ cardNumber: idCard });
+    
+    if (!virtualCard) {
+      console.log('❌ Carte d\'identité non trouvée');
+      return res.status(404).json({ 
+        success: false, 
+        exists: false,
+        message: 'Carte d\'identité non trouvée' 
+      });
+    }
+
+    console.log('✅ Carte d\'identité trouvée:', virtualCard.email);
+    
+    // Vérifier si un utilisateur existe déjà avec cet email
+    const existingUser = await User.findOne({ email: virtualCard.email });
+    
+    if (existingUser) {
+      console.log('⚠️ Un compte existe déjà avec cet email');
+      return res.status(400).json({ 
+        success: false, 
+        exists: true,
+        message: 'Un compte existe déjà avec cet email. Veuillez vous connecter.' 
+      });
+    }
+
+    res.json({ 
+      success: true, 
+      exists: true,
+      user: {
+        email: virtualCard.email,
+        name: virtualCard.name,
+        idCard: virtualCard.cardNumber
+      }
+    });
+  } catch (error) {
+    console.error('❌ Erreur vérification carte:', error);
+    res.status(500).json({ 
+      success: false, 
+      message: 'Erreur serveur lors de la vérification' 
+    });
+  }
+});
+
+// Inscription avec Face ID et carte d'identité
+app.post('/api/auth/register-faceid', async (req, res) => {
+  console.log('\n=== INSCRIPTION FACE ID ===');
+  const { email, name, idCard } = req.body;
+  console.log('Email:', email);
+  console.log('Name:', name);
+  console.log('ID Carte:', idCard);
+
+  try {
+    // Vérifier que la carte existe
+    const virtualCard = await VirtualIDCard.findOne({ cardNumber: idCard });
+    
+    if (!virtualCard) {
+      console.log('❌ Carte d\'identité non trouvée');
+      return res.status(404).json({ 
+        success: false,
+        message: 'Carte d\'identité non trouvée' 
+      });
+    }
+
+    // Vérifier que l'email correspond
+    if (virtualCard.email !== email) {
+      console.log('❌ Email ne correspond pas à la carte');
+      return res.status(400).json({ 
+        success: false,
+        message: 'Email ne correspond pas à la carte d\'identité' 
+      });
+    }
+
+    // Vérifier si l'utilisateur existe déjà
+    let user = await User.findOne({ email });
+    
+    if (user) {
+      console.log('⚠️ Utilisateur existe déjà');
+      return res.status(400).json({ 
+        success: false,
+        message: 'Un compte existe déjà avec cet email' 
+      });
+    }
+
+    // Créer un nouveau compte avec un mot de passe temporaire (sera changé lors de la première connexion)
+    const tempPassword = Math.random().toString(36).slice(-8);
+    const hashedPassword = await bcrypt.hash(tempPassword, 10);
+    
+    // Générer OTP
+    const otp = Math.floor(100000 + Math.random() * 900000).toString();
+    
+    user = new User({
+      email,
+      name,
+      password: hashedPassword,
+      otp,
+      otpExpires: Date.now() + 10 * 60 * 1000, // 10 minutes
+      isVerified: false,
+      profileImage: virtualCard.profileImage || null,
+      role: 'user',
+      status: 'active'
+    });
+
+    await user.save();
+    console.log('✅ Utilisateur créé avec Face ID');
+
+    // Envoyer OTP par email
+    await transporter.sendMail({
+      from: `"Auth System" <${process.env.EMAIL_USER}>`,
+      to: email,
+      subject: 'Code OTP - Inscription Face ID',
+      text: `Votre code OTP pour finaliser votre inscription avec Face ID est: ${otp}. Il expire dans 10 minutes.`,
+    });
+
+    console.log('✅ OTP envoyé à:', email);
+
+    res.status(201).json({ 
+      success: true,
+      message: `Code OTP envoyé à ${email}`,
+      requiresOtp: true
+    });
+  } catch (error) {
+    console.error('❌ Erreur inscription Face ID:', error);
+    res.status(500).json({ 
+      success: false,
+      message: 'Erreur serveur lors de l\'inscription' 
+    });
+  }
+});
+
+
 // Route de login direct pour les tests (sans OTP)
 app.post('/api/auth/admin-login', async (req, res) => {
   try {
