@@ -52,9 +52,21 @@ exports.createVirtualIDCard = async (req, res) => {
 
     // Validation des données obligatoires
     if (!cardData || !cardData.firstName || !cardData.idNumber) {
+      console.log('❌ Validation échouée: données manquantes');
       return res.status(400).json({
         success: false,
         message: 'Données de carte incomplètes'
+      });
+    }
+
+    // Vérifier si l'idNumber est déjà utilisé
+    console.log('🔍 Vérification unicité idNumber:', cardData.idNumber);
+    const existingCardById = await VirtualIDCard.findOne({ 'cardData.idNumber': cardData.idNumber });
+    if (existingCardById) {
+      console.log('❌ idNumber déjà utilisé:', cardData.idNumber);
+      return res.status(400).json({
+        success: false,
+        message: 'Ce numéro d\'identité est déjà utilisé'
       });
     }
 
@@ -110,7 +122,10 @@ exports.createVirtualIDCard = async (req, res) => {
       email: cardData.email || ''
     };
 
+    console.log('📋 Données complètes avant création:', JSON.stringify(completeCardData, null, 2));
+
     // Créer la carte
+    console.log('🏗️ Création de l\'objet VirtualIDCard...');
     const newCard = new VirtualIDCard({
       userId: req.user.userId,
       cardData: completeCardData,
@@ -120,7 +135,16 @@ exports.createVirtualIDCard = async (req, res) => {
       isActive: true
     });
 
-    await newCard.save();
+    console.log('💾 Tentative de sauvegarde en base de données...');
+    try {
+      await newCard.save();
+      console.log('✅ Sauvegarde réussie, ID:', newCard._id);
+    } catch (saveError) {
+      console.error('❌ Erreur lors de la sauvegarde:', saveError);
+      console.error('❌ Détails de l\'erreur:', saveError.message);
+      console.error('❌ Erreurs de validation:', saveError.errors);
+      throw saveError; // Re-throw pour être catché par le try-catch principal
+    }
 
     console.log('✅ Carte d\'identité virtuelle créée:', newCard._id);
 
@@ -131,10 +155,21 @@ exports.createVirtualIDCard = async (req, res) => {
     });
   } catch (err) {
     console.error('❌ Erreur création carte d\'identité:', err);
+    console.error('❌ Message d\'erreur:', err.message);
+    console.error('❌ Type d\'erreur:', err.name);
+    console.error('❌ Code d\'erreur:', err.code);
+    console.error('❌ Erreurs de validation:', err.errors);
+    if (err.errors) {
+      Object.keys(err.errors).forEach(key => {
+        console.error(`❌ Validation ${key}:`, err.errors[key].message);
+      });
+    }
+    console.error('❌ Stack trace:', err.stack);
     res.status(500).json({
       success: false,
       message: 'Erreur lors de la création de la carte d\'identité',
-      error: err.message
+      error: err.message,
+      details: err.errors
     });
   }
 };
