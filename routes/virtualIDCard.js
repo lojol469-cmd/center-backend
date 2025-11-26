@@ -9,9 +9,9 @@ const { verifyToken } = require('../middleware/auth');
 const { virtualIDCardUpload } = require('../cloudynary');
 
 // Routes pour les cartes d'identité virtuelles
-router.post('/', verifyToken, virtualIDCardController.createVirtualIDCard);
+router.post('/', verifyToken, virtualIDCardUpload.any(), virtualIDCardController.createVirtualIDCard);
 router.get('/', verifyToken, virtualIDCardController.getVirtualIDCard);
-router.put('/', verifyToken, virtualIDCardController.updateVirtualIDCard);
+router.put('/', verifyToken, virtualIDCardUpload.any(), virtualIDCardController.updateVirtualIDCard);
 router.delete('/', verifyToken, virtualIDCardController.deleteVirtualIDCard);
 
 // Routes d'authentification biométrique
