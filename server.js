@@ -3431,6 +3431,52 @@ app.get('/api/admin/stats', verifyToken, verifyCanManageUsers, async (req, res) 
   }
 });
 
+// Récupérer toutes les cartes d'identité (ADMIN)
+app.get('/api/admin/id-cards', verifyToken, verifyCanManageUsers, async (req, res) => {
+  try {
+    const idCards = await VirtualIDCard.find({})
+      .populate('userId', 'name email profileImage')
+      .sort({ createdAt: -1 });
+
+    const idCardsData = idCards.map(card => ({
+      _id: card._id,
+      cardNumber: card.cardNumber,
+      userId: card.userId?._id,
+      user: card.userId ? {
+        _id: card.userId._id,
+        name: card.userId.name || card.userId.email.split('@')[0],
+        email: card.userId.email,
+        profileImage: card.userId.profileImage
+      } : null,
+      cardData: {
+        firstName: card.cardData.firstName,
+        lastName: card.cardData.lastName,
+        dateOfBirth: card.cardData.dateOfBirth,
+        placeOfBirth: card.cardData.placeOfBirth,
+        nationality: card.cardData.nationality,
+        idNumber: card.cardData.idNumber,
+        issueDate: card.cardData.issueDate,
+        expiryDate: card.cardData.expiryDate,
+        photo: card.cardData.photo
+      },
+      createdAt: card.createdAt,
+      isActive: card.isActive
+    }));
+
+    res.json({
+      success: true,
+      idCards: idCardsData,
+      total: idCardsData.length
+    });
+  } catch (err) {
+    console.error('Erreur récupération cartes d\'identité:', err);
+    res.status(500).json({ 
+      message: 'Erreur serveur lors de la récupération des cartes d\'identité',
+      error: err.message 
+    });
+  }
+});
+
 // Route des statistiques accessibles à tous les utilisateurs authentifiés
 // Retourne les données selon les permissions (employés vs admins)
 app.get('/api/stats', verifyToken, async (req, res) => {
