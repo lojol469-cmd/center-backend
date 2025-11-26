@@ -30,10 +30,14 @@ exports.createVirtualIDCard = async (req, res) => {
   try {
     console.log('\n=== CRÉATION CARTE D\'IDENTITÉ VIRTUELLE ===');
     console.log('User ID:', req.user.userId);
-    console.log('Body:', req.body);
+    console.log('Body keys:', Object.keys(req.body));
+    console.log('Body cardData:', req.body.cardData);
+    console.log('Body biometricData:', req.body.biometricData);
+    console.log('Body forceRecreate:', req.body.forceRecreate);
     console.log('Files:', req.files);
 
-    const { cardData: cardDataString, biometricData: biometricDataString, forceRecreate } = req.body;
+    const { cardData: cardDataString, biometricData: biometricDataString } = req.body;
+    const forceRecreate = req.body.forceRecreate === 'true';
 
     // Parser les données JSON
     let cardData, biometricData;
