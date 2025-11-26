@@ -44,7 +44,7 @@ exports.createVirtualIDCard = async (req, res) => {
     }
 
     // Validation des données obligatoires
-    if (!cardData || !cardData.firstName || !cardData.lastName || !cardData.idNumber) {
+    if (!cardData || !cardData.firstName || !cardData.idNumber) {
       return res.status(400).json({
         success: false,
         message: 'Données de carte incomplètes'
