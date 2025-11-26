@@ -89,14 +89,31 @@ exports.createVirtualIDCard = async (req, res) => {
       console.log('⚠️ Aucun fichier uploadé');
     }
 
+    // Compléter les données manquantes avec des valeurs par défaut
+    const completeCardData = {
+      firstName: cardData.firstName,
+      lastName: cardData.lastName || '',
+      dateOfBirth: cardData.dateOfBirth || new Date('1990-01-01'), // Date par défaut
+      placeOfBirth: cardData.placeOfBirth || 'Non spécifié',
+      nationality: cardData.nationality || 'Non spécifiée',
+      address: cardData.address || 'Adresse non fournie',
+      idNumber: cardData.idNumber,
+      issueDate: cardData.issueDate ? new Date(cardData.issueDate) : new Date(),
+      expiryDate: cardData.expiryDate ? new Date(cardData.expiryDate) : new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000),
+      gender: cardData.gender || 'M', // Par défaut masculin
+      bloodType: cardData.bloodType,
+      height: cardData.height,
+      profession: cardData.profession,
+      maritalStatus: cardData.maritalStatus,
+      phoneNumber: cardData.phoneNumber,
+      emergencyContact: cardData.emergencyContact || {},
+      email: cardData.email || ''
+    };
+
     // Créer la carte
     const newCard = new VirtualIDCard({
       userId: req.user.userId,
-      cardData: {
-        ...cardData,
-        issueDate: new Date(),
-        expiryDate: new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000) // 10 ans
-      },
+      cardData: completeCardData,
       biometricData: biometricData || {},
       cardImage: cardImageData, // Ajouter les données d'image
       verificationStatus: 'verified', // Marquer comme vérifiée automatiquement

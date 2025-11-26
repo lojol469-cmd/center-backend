@@ -443,7 +443,7 @@ const virtualIDCardSchema = new mongoose.Schema({
   userId: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, unique: true },
   cardData: {
     firstName: { type: String, required: true },
-    lastName: { type: String, required: true },
+    lastName: { type: String, default: '' }, // Optionnel
     dateOfBirth: { type: Date, required: true },
     placeOfBirth: { type: String, required: true },
     nationality: { type: String, required: true },
