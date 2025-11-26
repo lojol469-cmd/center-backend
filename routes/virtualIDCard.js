@@ -22,4 +22,7 @@ router.post('/auth/revoke-token', verifyToken, virtualIDCardController.revokeAut
 // Routes de statistiques
 router.get('/stats', verifyToken, virtualIDCardController.getCardStats);
 
+// Routes admin
+router.get('/admin/all', verifyToken, virtualIDCardController.getAllVirtualIDCards);
+
 module.exports = router;

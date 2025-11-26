@@ -509,5 +509,64 @@ exports.getCardStats = async (req, res) => {
     });
   }
 };
+exports.getAllVirtualIDCards = async (req, res) => {
+  try {
+    console.log('\n=== RÉCUPÉRATION TOUTES LES CARTES D\'IDENTITÉ (ADMIN) ===');
+
+    // Vérifier que l'utilisateur est admin (accessLevel >= 3)
+    if (!req.user || req.user.accessLevel < 3) {
+      return res.status(403).json({
+        success: false,
+        message: 'Accès non autorisé - Niveau d\'accès insuffisant'
+      });
+    }
+
+    const cards = await VirtualIDCard.find({})
+      .populate('userId', 'name email profileImage accessLevel')
+      .sort({ createdAt: -1 });
+
+    // Transformer les données pour inclure les infos utilisateur
+    const cardsWithUserInfo = cards.map(card => ({
+      _id: card._id,
+      userId: card.userId._id,
+      userName: card.userId.name,
+      userEmail: card.userId.email,
+      userProfileImage: card.userId.profileImage,
+      userAccessLevel: card.userId.accessLevel,
+      cardData: card.cardData,
+      biometricData: {
+        hasFingerprint: !!card.biometricData.fingerprintHash,
+        hasFaceData: !!card.biometricData.faceData,
+        hasIrisData: !!card.biometricData.irisData,
+        hasVoiceData: !!card.biometricData.voiceData,
+        lastBiometricUpdate: card.biometricData.lastBiometricUpdate
+      },
+      verificationStatus: card.verificationStatus,
+      isActive: card.isActive,
+      usageCount: card.usageCount,
+      lastUsed: card.lastUsed,
+      createdAt: card.createdAt,
+      updatedAt: card.updatedAt,
+      activeTokensCount: card.authenticationTokens.filter(t =>
+        t.isActive && t.expiresAt > new Date()
+      ).length
+    }));
+
+    console.log(`✅ ${cardsWithUserInfo.length} cartes d'identité récupérées`);
+
+    res.json({
+      success: true,
+      cards: cardsWithUserInfo,
+      total: cardsWithUserInfo.length
+    });
+  } catch (err) {
+    console.error('❌ Erreur récupération toutes les cartes:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la récupération des cartes d\'identité',
+      error: err.message
+    });
+  }
+};
 
 module.exports = exports;
