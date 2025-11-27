@@ -218,6 +218,7 @@ const virtualIDCardStorage = new CloudinaryStorage({
         folder: 'center-app/virtual-id-cards',
         allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'pdf'],
         resource_type: 'auto',
+        access_mode: 'public', // ✅ AJOUTÉ - Rendre les fichiers publics
         transformation: [{ quality: 'auto:good' }],
         public_id: (req, file) => {
             const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);

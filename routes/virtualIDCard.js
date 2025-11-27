@@ -28,6 +28,9 @@ router.post('/check-user-card', virtualIDCardController.checkUserHasVirtualIDCar
 // Routes de statistiques
 router.get('/stats', verifyToken, virtualIDCardController.getCardStats);
 
+// Télécharger le PDF de la carte d'identité (via backend pour contourner les restrictions Cloudinary)
+router.get('/download-pdf', verifyToken, virtualIDCardController.downloadVirtualIDCardPDF);
+
 // Routes admin
 router.get('/admin/all', verifyToken, virtualIDCardController.getAllVirtualIDCards);
 router.delete('/admin/:cardId', verifyToken, virtualIDCardController.deleteVirtualIDCardById);
