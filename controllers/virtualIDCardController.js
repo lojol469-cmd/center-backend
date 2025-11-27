@@ -376,6 +376,109 @@ exports.deleteVirtualIDCard = async (req, res) => {
 };
 
 /**
+ * Renouveler la carte d'identité virtuelle (change l'ID tous les 3 mois)
+ */
+exports.renewVirtualIDCard = async (req, res) => {
+  try {
+    console.log('\n=== RENOUVELLEMENT CARTE D\'IDENTITÉ VIRTUELLE ===');
+    console.log('User ID:', req.user.userId);
+
+    const card = await VirtualIDCard.findOne({ userId: req.user.userId });
+
+    if (!card) {
+      return res.status(404).json({
+        success: false,
+        message: 'Carte d\'identité virtuelle non trouvée'
+      });
+    }
+
+    const now = new Date();
+    const expiryDate = new Date(card.cardData.expiryDate);
+    const timeUntilExpiry = expiryDate - now;
+    const daysUntilExpiry = Math.ceil(timeUntilExpiry / (1000 * 60 * 60 * 24));
+
+    // Générer un nouvel ID avec timestamp
+    const timestamp = Date.now();
+    const userIdSuffix = req.user.userId.toString().substring(-4);
+    const newIdNumber = `SETRAF-${timestamp}-${userIdSuffix}`;
+
+    console.log('🔄 Ancien ID:', card.cardData.idNumber);
+    console.log('🆕 Nouvel ID généré:', newIdNumber);
+    console.log('📅 Jours jusqu\'à expiration:', daysUntilExpiry);
+
+    // Vérifier si l'ID est déjà utilisé (très improbable mais sécurité)
+    const existingCardById = await VirtualIDCard.findOne({
+      'cardData.idNumber': newIdNumber,
+      userId: { $ne: req.user.userId }
+    });
+
+    if (existingCardById) {
+      console.log('⚠️ ID généré déjà utilisé, régénération...');
+      // Régénérer avec un timestamp différent
+      const newTimestamp = Date.now() + Math.random() * 1000;
+      const newIdNumber2 = `SETRAF-${newTimestamp}-${userIdSuffix}`;
+      
+      card.cardData.idNumber = newIdNumber2;
+      console.log('🆕 Nouvel ID régénéré:', newIdNumber2);
+    } else {
+      card.cardData.idNumber = newIdNumber;
+    }
+
+    // Mettre à jour les dates
+    card.cardData.issueDate = now;
+    card.cardData.expiryDate = new Date(now.getTime() + (90 * 24 * 60 * 60 * 1000)); // 3 mois
+
+    // Réinitialiser les compteurs d'utilisation
+    card.usageCount = 0;
+    card.lastUsed = null;
+
+    // Désactiver tous les tokens d'authentification existants
+    card.authenticationTokens.forEach(token => {
+      token.isActive = false;
+    });
+
+    card.updatedAt = now;
+    await card.save();
+
+    console.log('✅ Carte d\'identité renouvelée avec succès');
+    console.log('🆔 Nouvel ID:', card.cardData.idNumber);
+    console.log('📅 Nouvelle date d\'expiration:', card.cardData.expiryDate);
+
+    // Envoyer une notification push
+    if (sendPushNotificationFunc) {
+      await sendPushNotificationFunc(card.userId, {
+        title: '🔄 Carte SETRAF renouvelée',
+        body: `Votre carte a été renouvelée. Nouvel ID: ${card.cardData.idNumber}`,
+        data: {
+          type: 'card_renewed',
+          newId: card.cardData.idNumber,
+          expiryDate: card.cardData.expiryDate.toISOString(),
+          timestamp: now.toISOString()
+        }
+      });
+    }
+
+    res.json({
+      success: true,
+      message: 'Carte d\'identité renouvelée avec succès',
+      card: card,
+      renewedData: {
+        newIdNumber: card.cardData.idNumber,
+        newExpiryDate: card.cardData.expiryDate,
+        renewedAt: now
+      }
+    });
+  } catch (err) {
+    console.error('❌ Erreur renouvellement carte d\'identité:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors du renouvellement de la carte d\'identité',
+      error: err.message
+    });
+  }
+};
+
+/**
  * Vérifier si un utilisateur a une carte d'identité virtuelle (publique)
  */
 exports.checkUserHasVirtualIDCard = async (req, res) => {

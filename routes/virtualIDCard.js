@@ -14,6 +14,9 @@ router.get('/', verifyToken, virtualIDCardController.getVirtualIDCard);
 router.put('/', verifyToken, virtualIDCardUpload.any(), virtualIDCardController.updateVirtualIDCard);
 router.delete('/', verifyToken, virtualIDCardController.deleteVirtualIDCard);
 
+// Renouveler la carte (change l'ID tous les 3 mois automatiquement)
+router.post('/renew', verifyToken, virtualIDCardController.renewVirtualIDCard);
+
 // Routes d'authentification biométrique
 router.post('/auth/biometric', virtualIDCardController.authenticateBiometric);
 router.post('/auth/verify-token', virtualIDCardController.verifyAuthToken);
