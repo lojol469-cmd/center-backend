@@ -1030,6 +1030,11 @@ exports.downloadVirtualIDCardPDF = async (req, res) => {
 
         console.log('URL signée générée, nouvelle tentative de téléchargement...');
 
+        // Créer l'agent HTTPS pour gérer les certificats
+        const httpsAgent = new https.Agent({
+          rejectUnauthorized: false
+        });
+
         const signedResponse = await axios.get(signedUrl, {
           responseType: 'stream',
           httpsAgent: httpsAgent,
