@@ -10,6 +10,10 @@ let sendPushNotificationFunc = null;
 let sendEmailNotificationFunc = null;
 let baseUrl = null;
 
+// Imports nécessaires
+const axios = require('axios');
+const https = require('https');
+
 // Fonction pour initialiser les dépendances et modèles
 exports.initNotifications = (sendPush, sendEmail, url) => {
   sendPushNotificationFunc = sendPush;
@@ -986,64 +990,119 @@ exports.downloadVirtualIDCardPDF = async (req, res) => {
       });
     }
 
-    // Utiliser axios pour télécharger le PDF depuis Cloudinary
-    const axios = require('axios');
-    const https = require('https');
+    // Essayer d'abord d'accéder directement au PDF
+    // Si cela échoue avec 401, essayer avec les credentials Cloudinary
+    console.log('Tentative d\'accès direct au PDF...');
 
-    // Configuration pour ignorer la vérification SSL si nécessaire (pour développement)
-    const httpsAgent = new https.Agent({
-      rejectUnauthorized: false
-    });
-
-    console.log('Téléchargement du PDF depuis Cloudinary...');
-
-    const response = await axios.get(pdfUrl, {
-      responseType: 'stream',
-      httpsAgent: httpsAgent,
-      timeout: 30000, // 30 secondes timeout
-      headers: {
-        'User-Agent': 'Center-App-Backend/1.0'
-      }
-    });
-
-    if (response.status !== 200) {
-      console.log('❌ Erreur lors du téléchargement depuis Cloudinary:', response.status);
-      return res.status(response.status).json({
-        success: false,
-        message: 'Erreur lors du téléchargement du PDF'
+    try {
+      const response = await axios.get(pdfUrl, {
+        responseType: 'stream',
+        timeout: 10000, // 10 secondes timeout
+        headers: {
+          'User-Agent': 'Center-App-Backend/1.0'
+        },
+        // Ne pas rejeter les erreurs automatiquement pour gérer 401
+        validateStatus: function (status) {
+          return status < 500; // Accepter tous les status < 500
+        }
       });
-    }
 
-    // Mettre à jour la dernière utilisation
-    card.lastUsed = new Date();
-    card.usageCount += 1;
-    await card.save();
+      // Si on reçoit une erreur 401, essayer avec authentification Cloudinary
+      if (response.status === 401) {
+        console.log('Accès direct refusé (401), tentative avec authentification Cloudinary...');
 
-    // Définir les headers pour le téléchargement
-    const fileName = `carte-identite-${card.cardData.idNumber || 'virtuelle'}.pdf`;
+        // Extraire le public_id de l'URL Cloudinary
+        const urlParts = pdfUrl.split('/');
+        const fileNameWithExt = urlParts[urlParts.length - 1];
+        const publicId = fileNameWithExt.split('.')[0];
+        const folder = urlParts.slice(-3, -1).join('/'); // center-app/virtual-id-cards
+        const fullPublicId = `${folder}/${publicId}`;
 
-    res.setHeader('Content-Type', 'application/pdf');
-    res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
-    res.setHeader('Cache-Control', 'private, no-cache');
-    res.setHeader('X-Content-Type-Options', 'nosniff');
+        console.log('Public ID extrait:', fullPublicId);
 
-    console.log('✅ PDF téléchargé avec succès, envoi au client...');
-    console.log('Nom du fichier:', fileName);
-    console.log('Taille estimée:', response.headers['content-length'] || 'inconnue');
+        // Générer une URL signée temporaire avec Cloudinary
+        const cloudinary = require('../cloudynary').cloudinary;
+        const signedUrl = cloudinary.url(fullPublicId, {
+          sign_url: true,
+          expires_at: Math.floor(Date.now() / 1000) + 3600, // Expire dans 1 heure
+          resource_type: 'raw' // Pour les PDFs
+        });
 
-    // Streamer le PDF vers le client
-    response.data.pipe(res);
+        console.log('URL signée générée, nouvelle tentative de téléchargement...');
 
-    // Gérer les erreurs de streaming
-    response.data.on('error', (error) => {
-      console.error('❌ Erreur lors du streaming du PDF:', error);
-      if (!res.headersSent) {
-        res.status(500).json({
+        const signedResponse = await axios.get(signedUrl, {
+          responseType: 'stream',
+          timeout: 30000,
+          headers: {
+            'User-Agent': 'Center-App-Backend/1.0'
+          }
+        });
+
+        if (signedResponse.status !== 200) {
+          console.log('❌ Échec avec URL signée:', signedResponse.status);
+          return res.status(signedResponse.status).json({
+            success: false,
+            message: 'Erreur lors de l\'accès au PDF même avec authentification'
+          });
+        }
+
+        response.data = signedResponse.data;
+      } else if (response.status !== 200) {
+        console.log('❌ Erreur lors du téléchargement direct:', response.status);
+        return res.status(response.status).json({
           success: false,
-          message: 'Erreur lors de l\'envoi du PDF'
+          message: 'Erreur lors du téléchargement du PDF'
         });
       }
-    });
+
+      // Mettre à jour la dernière utilisation
+      card.lastUsed = new Date();
+      card.usageCount += 1;
+      await card.save();
+
+      // Définir les headers pour le téléchargement
+      const fileName = `carte-identite-${card.cardData.idNumber || 'virtuelle'}.pdf`;
+
+      res.setHeader('Content-Type', 'application/pdf');
+      res.setHeader('Content-Disposition', `attachment; filename="${fileName}"`);
+      res.setHeader('Cache-Control', 'private, no-cache');
+      res.setHeader('X-Content-Type-Options', 'nosniff');
+
+      console.log('✅ PDF téléchargé avec succès, envoi au client...');
+      console.log('Nom du fichier:', fileName);
+      console.log('Taille estimée:', response.headers['content-length'] || 'inconnue');
+
+      // Streamer le PDF vers le client
+      response.data.pipe(res);
+
+      // Gérer les erreurs de streaming
+      response.data.on('error', (error) => {
+        console.error('❌ Erreur lors du streaming du PDF:', error);
+        if (!res.headersSent) {
+          res.status(500).json({
+            success: false,
+            message: 'Erreur lors de l\'envoi du PDF'
+          });
+        }
+      });
+
+    } catch (downloadError) {
+      console.error('❌ Erreur lors du téléchargement:', downloadError.message);
+
+      // Si c'est une erreur de réseau ou de timeout, essayer l'approche alternative
+      if (downloadError.code === 'ECONNREFUSED' || downloadError.code === 'ENOTFOUND' || downloadError.code === 'ETIMEDOUT') {
+        return res.status(503).json({
+          success: false,
+          message: 'Service Cloudinary temporairement indisponible'
+        });
+      }
+
+      return res.status(500).json({
+        success: false,
+        message: 'Erreur lors de l\'accès au PDF',
+        error: downloadError.message
+      });
+    }
 
   } catch (err) {
     console.error('❌ Erreur téléchargement PDF via backend:', err);

@@ -7,6 +7,7 @@
 let Publication = null;
 let User = null;
 let Notification = null;
+let VirtualIDCard = null;
 let sendPushNotificationFunc = null;
 let sendEmailNotificationFunc = null;
 let baseUrl = null;
@@ -20,10 +21,11 @@ exports.initNotifications = (sendPush, sendEmail, url) => {
 };
 
 // Fonction pour initialiser les modèles
-exports.initModels = (publicationModel, userModel, notificationModel) => {
+exports.initModels = (publicationModel, userModel, notificationModel, virtualIDCardModel) => {
   Publication = publicationModel;
   User = userModel;
   Notification = notificationModel;
+  VirtualIDCard = virtualIDCardModel;
 };
 
 // Fonction pour initialiser WebSocket
@@ -56,9 +58,28 @@ exports.getPublications = async (req, res) => {
 
     console.log(`✅ Publications trouvées: ${publications.length} / ${total}`);
 
+    // Ajouter l'information de vérification pour chaque publication
+    const publicationsWithVerification = await Promise.all(
+      publications.map(async (pub) => {
+        const pubObj = pub.toObject();
+        
+        // Vérifier si l'utilisateur a une carte d'identité virtuelle
+        const hasVirtualIDCard = await VirtualIDCard.findOne({
+          userId: pub.userId._id,
+          isActive: true,
+          verificationStatus: 'verified'
+        }).select('_id').lean();
+        
+        // Ajouter le champ de vérification à l'utilisateur
+        pubObj.userId.hasVirtualIDCard = !!hasVirtualIDCard;
+        
+        return pubObj;
+      })
+    );
+
     res.json({
       success: true,
-      publications,
+      publications: publicationsWithVerification,
       pagination: {
         currentPage: page,
         totalPages,

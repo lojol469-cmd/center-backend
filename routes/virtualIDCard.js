@@ -35,4 +35,7 @@ router.get('/download-pdf', verifyToken, virtualIDCardController.downloadVirtual
 router.get('/admin/all', verifyToken, virtualIDCardController.getAllVirtualIDCards);
 router.delete('/admin/:cardId', verifyToken, virtualIDCardController.deleteVirtualIDCardById);
 
+// Route pour tÃ©lÃ©charger le PDF via le backend (contourne les restrictions Cloudinary)
+router.get('/download-pdf', verifyToken, virtualIDCardController.downloadVirtualIDCardPDF);
+
 module.exports = router;
