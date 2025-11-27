@@ -121,7 +121,11 @@ const SERVER_IP = getLocalNetworkIP();
 // ✅ Détection automatique de l'environnement
 // En production (Render), utiliser l'URL Render au lieu de l'IP locale
 let BASE_URL;
-if (process.env.NODE_ENV === 'production' && process.env.RENDER) {
+if (process.env.BASE_URL) {
+  // Utiliser l'URL définie dans les variables d'environnement (priorité absolue)
+  BASE_URL = process.env.BASE_URL;
+  console.log(`🌐 URL de base définie via variable d'environnement: ${BASE_URL}`);
+} else if (process.env.NODE_ENV === 'production' && process.env.RENDER) {
   // En production sur Render, utiliser l'URL Render
   BASE_URL = process.env.RENDER_EXTERNAL_URL || 'https://center-backend-v9rf.onrender.com';
   console.log(`🌐 Mode PRODUCTION détecté (Render)`);
@@ -1243,7 +1247,7 @@ async function sendEmailNotification(userEmail, subject, htmlContent) {
 // Initialiser les fonctions de notification et les modèles dans le controller
 const publicationController = require('./controllers/publicationController');
 const virtualIDCardController = require('./controllers/virtualIDCardController');
-publicationController.initModels(Publication, User, Notification);
+publicationController.initModels(Publication, User, Notification, VirtualIDCard);
 publicationController.initNotifications(sendPushNotification, sendEmailNotification, BASE_URL);
 publicationController.initWebSocket(broadcastToAll);
 
