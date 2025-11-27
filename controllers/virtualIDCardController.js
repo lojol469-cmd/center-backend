@@ -10,6 +10,10 @@ let sendPushNotificationFunc = null;
 let sendEmailNotificationFunc = null;
 let baseUrl = null;
 
+// Imports nécessaires
+const axios = require('axios');
+const https = require('https');
+
 // Fonction pour initialiser les dépendances et modèles
 exports.initNotifications = (sendPush, sendEmail, url) => {
   sendPushNotificationFunc = sendPush;
