@@ -210,6 +210,39 @@ const employeeUpload = multer({
 });
 
 // ========================================
+// CONFIGURATION POUR PHOTO DE PROFIL SUR CARTE D'IDENTITÉ
+// ========================================
+const idCardPhotoStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'center-app/id-card-photos',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+        resource_type: 'image',
+        transformation: [
+            { width: 400, height: 500, crop: 'fill', gravity: 'face' },
+            { quality: 'auto:good' }
+        ],
+        public_id: (req, file) => {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            return 'idphoto-' + uniqueSuffix;
+        }
+    }
+});
+
+const idCardPhotoUpload = multer({
+    storage: idCardPhotoStorage,
+    limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
+    fileFilter: (req, file, cb) => {
+        const allowed = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+        if (allowed.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Seules les images JPG/PNG/WEBP sont autorisées pour la photo de carte'), false);
+        }
+    }
+});
+
+// ========================================
 // CONFIGURATION POUR CARTES D'IDENTITÉ VIRTUELLES (Images)
 // ========================================
 const virtualIDCardStorage = new CloudinaryStorage({
@@ -281,6 +314,7 @@ module.exports = {
     markerUpload,
     employeeUpload,
     virtualIDCardUpload,
+    idCardPhotoUpload,
     deleteFromCloudinary,
     getOptimizedUrl,
     getTransformedUrl

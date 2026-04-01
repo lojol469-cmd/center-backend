@@ -10,8 +10,10 @@ const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const dns = require('dns').promises;
 const { WebSocketServer } = require('ws');
 const admin = require('firebase-admin');
+// Use global fetch (Node 18+) — no node-fetch dependency required
 const { 
   uploadCloudinary, 
   publicationUpload, 
@@ -245,9 +247,99 @@ app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 // ========================================
 
 const MONGO_URI = process.env.MONGO_URI;
-mongoose.connect(MONGO_URI)
-  .then(() => console.log('MongoDB connecté'))
-  .catch(err => console.error('Erreur MongoDB:', err));
+
+// Paramètres de reconnexion (configurables via .env)
+const MAX_MONGO_RETRIES = parseInt(process.env.MONGO_CONNECT_RETRIES || '5', 10);
+const MONGO_DELAY_MS = parseInt(process.env.MONGO_CONNECT_DELAY_MS || '2000', 10);
+
+async function connectWithRetry(uri, retries = MAX_MONGO_RETRIES) {
+  const attempt = (MAX_MONGO_RETRIES - retries) + 1;
+  try {
+    await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000 });
+    console.log(`✅ MongoDB connecté (${uri.includes('127.0.0.1') || uri.includes('localhost') ? 'local' : 'MONGO_URI'})`);
+    return true;
+  } catch (err) {
+    console.error(`❌ Tentative ${attempt} - erreur connexion Mongo:`, err.message || err);
+    if (retries > 1) {
+      const delay = MONGO_DELAY_MS * Math.pow(2, attempt - 1);
+      console.log(`🔁 Nouvelle tentative dans ${delay}ms (${retries - 1} restantes)`);
+      await new Promise(r => setTimeout(r, delay));
+      return connectWithRetry(uri, retries - 1);
+    } else {
+      console.error('❌ Échec après plusieurs tentatives de connexion à MongoDB');
+      return false;
+    }
+  }
+}
+
+(async function initMongo() {
+  // Déterminer si l'on doit utiliser la base locale.
+  // Priorité:
+  // - Si USE_LOCAL_DB est défini, respecter sa valeur (true/false).
+  // - Sinon, si MONGO_URI est défini, utiliser MONGO_URI.
+  // - Sinon, tomber sur la Mongo locale.
+  let useLocal;
+  if (typeof process.env.USE_LOCAL_DB !== 'undefined') {
+    useLocal = process.env.USE_LOCAL_DB === 'true';
+  } else {
+    useLocal = !process.env.MONGO_URI;
+  }
+
+  const localUri = process.env.LOCAL_MONGO_URI || 'mongodb://127.0.0.1:27017/myDatabase60';
+
+  if (useLocal) {
+    console.log('ℹ️ Mode développement / USE_LOCAL_DB activé → connexion directe à Mongo local');
+    const ok = await connectWithRetry(localUri);
+    if (!ok) {
+      console.warn('⚠️ Impossible de se connecter à Mongo local. Certaines fonctionnalités dépendantes de la DB échoueront.');
+      console.warn('💡 Pour démarrer rapidement Mongo en Docker : docker-compose -f docker-compose.mongo.yml up -d');
+    }
+    return;
+  }
+  if (!MONGO_URI) {
+    console.warn('⚠️ MONGO_URI non défini — utilisation du fallback local');
+  }
+
+  // Si l'utilisateur a fourni une liste d'hôtes (MONGO_HOSTS), construire une URI non-SRV
+  let primaryUri;
+  if (process.env.MONGO_HOSTS && process.env.MONGO_USER && process.env.MONGO_PASSWORD && process.env.MONGO_DB_NAME) {
+    const hosts = process.env.MONGO_HOSTS; // ex: host1:27017,host2:27017,host3:27017
+    const user = process.env.MONGO_USER;
+    const pass = encodeURIComponent(process.env.MONGO_PASSWORD);
+    const db = process.env.MONGO_DB_NAME;
+    primaryUri = `mongodb://${user}:${pass}@${hosts}/${db}?ssl=true&authSource=admin&retryWrites=true&w=majority`;
+    console.log('🔧 Utilisation de MONGO_HOSTS → connexion non-SRV via hosts fournis');
+    console.log(`🔧 Hosts: ${hosts}`);
+  } else {
+    primaryUri = MONGO_URI || localUri;
+  }
+  // Si l'URI est de type SRV (mongodb+srv), tenter d'abord une résolution DNS SRV explicite
+  let uriToTry = primaryUri;
+  if (primaryUri && primaryUri.startsWith('mongodb+srv://')) {
+    try {
+      const hostPart = primaryUri.replace(/^mongodb\+srv:\/\//, '').split('@').pop().split('/')[0];
+      console.log(`🔎 Tentative résolution SRV pour: ${hostPart}`);
+      const srvName = `_mongodb._tcp.${hostPart}`;
+      const records = await dns.resolveSrv(srvName);
+      console.log(`✅ Résolution SRV OK (${records.length} enregistrements)`);
+    } catch (dnsErr) {
+      console.error('❌ Échec résolution SRV (querySrv):', dnsErr.code || dnsErr.message || dnsErr);
+      console.log('🔁 Tentative de fallback en remplaçant mongodb+srv:// par mongodb://');
+      // Fallback simple: remplacer scheme mongodb+srv:// → mongodb:// (connexion directe sur host:27017)
+      uriToTry = primaryUri.replace('mongodb+srv://', 'mongodb://');
+      console.log(`🔁 URI fallback: ${uriToTry.replace(/(mongodb:\/\/[^:]+):[^@]+@/, '$1:****@')}`);
+    }
+  }
+
+  const okPrimary = await connectWithRetry(uriToTry);
+  if (!okPrimary && primaryUri !== localUri) {
+    console.log(`🔁 Tentative de fallback vers Mongo local: ${localUri}`);
+    const okFallback = await connectWithRetry(localUri, Math.max(1, Math.floor(MAX_MONGO_RETRIES / 2)));
+    if (!okFallback) {
+      console.error('❌ Erreur: impossible de se connecter à MongoDB (primary + fallback). Le serveur démarrera néanmoins.');
+    }
+  }
+})();
 
 // ========================================
 // MODÈLES (SCHÉMAS)
@@ -475,10 +567,12 @@ const virtualIDCardSchema = new mongoose.Schema({
     lastBiometricUpdate: { type: Date, default: Date.now }
   },
   cardImage: {
-    frontImage: { type: String }, // URL Cloudinary de l'image avant
+    frontImage: { type: String }, // URL Cloudinary de l'image avant (PDF généré)
     backImage: { type: String }, // URL Cloudinary de l'image arrière
     frontImagePublicId: { type: String },
-    backImagePublicId: { type: String }
+    backImagePublicId: { type: String },
+    profilePhoto: { type: String }, // URL Cloudinary de la photo de profil sur la carte
+    profilePhotoPublicId: { type: String } // Public ID pour suppression Cloudinary
   },
   securityFeatures: {
     qrCode: { type: String }, // Données pour QR code
@@ -685,8 +779,9 @@ app.post('/api/auth/register', async (req, res) => {
 
     res.json({ message: 'OTP envoyé à votre email' });
   } catch (err) {
-    console.error(err);
-    res.status(500).json({ message: 'Erreur serveur' });
+    console.error('❌ Erreur /api/auth/register:', err.stack || err);
+    // Retourner le message d'erreur pour faciliter le debug (do not expose in production)
+    res.status(500).json({ message: err.message || 'Erreur serveur' });
   }
 });
 
@@ -1069,6 +1164,127 @@ app.post('/api/auth/admin-login', async (req, res) => {
 // ========================================
 // ROUTES : NOTIFICATIONS PUSH
 // ========================================
+
+// Proxy vers le Chat Agent (service Python) pour les endpoints /upload et /chat
+// Permet au frontend d'appeler ${BASE_URL}/upload et /chat même si l'agent tourne séparément.
+const CHAT_AGENT_URL = process.env.CHAT_AGENT_URL || 'http://localhost:8001';
+
+app.post('/upload', async (req, res) => {
+  try {
+    // Forward the multipart request to the chat agent
+    const target = `${CHAT_AGENT_URL}/upload`;
+    console.log(`🔁 Proxy /upload → ${target}`);
+
+    // Use raw body piping via fetch with form-data reconstruction
+    // If request is multipart, recreate form-data
+    const contentType = req.headers['content-type'] || '';
+
+    if (contentType.includes('multipart/form-data')) {
+      // Reconstruct form-data from incoming req
+      const Busboy = require('busboy');
+      const FormData = require('form-data');
+
+      const busboy = new Busboy({ headers: req.headers });
+      const form = new FormData();
+
+      await new Promise((resolve, reject) => {
+        busboy.on('file', (fieldname, file, filename, encoding, mimetype) => {
+          form.append(fieldname, file, { filename, contentType: mimetype });
+        });
+        busboy.on('field', (name, val) => form.append(name, val));
+        busboy.on('finish', resolve);
+        busboy.on('error', reject);
+        req.pipe(busboy);
+      });
+
+      const response = await fetch(target, { method: 'POST', body: form });
+      const ct = response.headers.get('content-type') || '';
+      const text = await response.text();
+      // Si le service distant renvoie du JSON, le renvoyer tel quel
+      if (ct.includes('application/json')) {
+        try { return res.status(response.status).json(JSON.parse(text)); }
+        catch (e) {
+          console.warn('⚠️ /upload: réponse JSON invalide du Chat Agent', e.message);
+          return res.status(response.status).json({ success: false, error: 'Invalid JSON from Chat Agent', raw: text.slice(0, 200) });
+        }
+      }
+
+      // Si réponse non-JSON (ex: HTML d'erreur), renvoyer un JSON structuré pour éviter le FormatException côté client
+      console.warn('⚠️ /upload: Chat Agent a renvoyé une réponse non-JSON', { status: response.status, contentType: ct });
+      return res.status(response.status).json({
+        success: false,
+        error: 'Non-JSON response from Chat Agent',
+        status: response.status,
+        contentType: ct,
+        bodySnippet: text ? text.slice(0, 200) : ''
+      });
+      
+    }
+
+    // For JSON requests, forward body
+    const body = await new Promise((resolve) => {
+      let data = '';
+      req.on('data', chunk => data += chunk.toString());
+      req.on('end', () => resolve(data || null));
+    });
+
+    const forwarded = await fetch(target, {
+      method: 'POST',
+      headers: { 'Content-Type': req.headers['content-type'] || 'application/json' },
+      body: body
+    });
+
+    const ct = forwarded.headers.get('content-type') || '';
+    const text = await forwarded.text();
+    if (ct.includes('application/json')) {
+      try { return res.status(forwarded.status).json(JSON.parse(text)); }
+      catch (e) {
+        console.warn('⚠️ /upload JSON parse error:', e.message);
+        return res.status(forwarded.status).json({ success: false, error: 'Invalid JSON from Chat Agent', raw: text.slice(0,200) });
+      }
+    }
+
+    console.warn('⚠️ /upload: forwarded non-JSON response', { status: forwarded.status, contentType: ct });
+    return res.status(forwarded.status).json({ success: false, error: 'Non-JSON response from Chat Agent', status: forwarded.status, contentType: ct, bodySnippet: text ? text.slice(0,200) : '' });
+  } catch (err) {
+    console.error('❌ Erreur proxy /upload:', err);
+    res.status(502).json({ message: 'Erreur proxy vers le Chat Agent', error: err.message });
+  }
+});
+
+app.post('/chat', async (req, res) => {
+  try {
+    const target = `${CHAT_AGENT_URL}/chat`;
+    console.log(`🔁 Proxy /chat → ${target}`);
+    const body = await new Promise((resolve) => {
+      let data = '';
+      req.on('data', chunk => data += chunk.toString());
+      req.on('end', () => resolve(data || null));
+    });
+
+    const forwarded = await fetch(target, {
+      method: 'POST',
+      headers: { 'Content-Type': req.headers['content-type'] || 'application/json' },
+      body: body
+    });
+
+    const ct = forwarded.headers.get('content-type') || '';
+    const text = await forwarded.text();
+    if (ct.includes('application/json')) {
+      try { return res.status(forwarded.status).json(JSON.parse(text)); }
+      catch (e) {
+        console.warn('⚠️ /chat JSON parse error:', e.message);
+        return res.status(forwarded.status).json({ success: false, error: 'Invalid JSON from Chat Agent', raw: text.slice(0,200) });
+      }
+    }
+
+    console.warn('⚠️ /chat: forwarded non-JSON response', { status: forwarded.status, contentType: ct });
+    return res.status(forwarded.status).json({ success: false, error: 'Non-JSON response from Chat Agent', status: forwarded.status, contentType: ct, bodySnippet: text ? text.slice(0,200) : '' });
+  } catch (err) {
+    console.error('❌ Erreur proxy /chat:', err);
+    res.status(502).json({ message: 'Erreur proxy vers le Chat Agent', error: err.message });
+  }
+});
 
 // Mettre à jour le token FCM de l'utilisateur
 app.post('/api/users/fcm-token', verifyToken, async (req, res) => {
@@ -4927,4 +5143,33 @@ app.post('/api/chat/groups/general/messages', verifyToken, async (req, res) => {
       message: 'Erreur serveur'
     });
   }
+});
+
+// ========================================
+// GESTIONNAIRE D'ERREURS GLOBAL (JSON)
+// Doit être APRÈS toutes les routes.
+// ========================================
+// 404 - route inconnue
+app.use((req, res) => {
+  res.status(404).json({ success: false, message: `Route introuvable: ${req.method} ${req.originalUrl}` });
+});
+
+// Erreurs (multer, cloudinary, validations, etc.)
+// eslint-disable-next-line no-unused-vars
+app.use((err, req, res, next) => {
+  console.error('❌ [ErrorHandler]', err.message || err);
+
+  if (err.code === 'LIMIT_FILE_SIZE') {
+    return res.status(413).json({ success: false, message: 'Fichier trop volumineux', error: err.message });
+  }
+  if ((err.message && err.message.includes('Format')) || (err.message && err.message.includes('supporté'))) {
+    return res.status(415).json({ success: false, message: err.message });
+  }
+
+  const status = err.status || err.statusCode || 500;
+  res.status(status).json({
+    success: false,
+    message: err.message || 'Erreur serveur interne',
+    ...(process.env.NODE_ENV !== 'production' && { stack: err.stack })
+  });
 });

@@ -1,0 +1,44 @@
+version: '3.8'
+
+services:
+  mongo:
+    image: mongo:6
+    container_name: center_mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodbdata:/data/db
+    networks:
+      - center-network
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: center_backend
+    image: center-backend:latest
+    depends_on:
+      - mongo
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    environment:
+      # Forcer la connexion vers le service mongo du compose
+      - MONGO_URI=mongodb://mongo:27017/myDatabase60
+      - NODE_ENV=production
+    volumes:
+      - ./uploads:/app/uploads
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "node", "-e", "require('http').get('http://localhost:5000/api/server-info', (r) => {process.exit(r.statusCode === 200 ? 0 : 1)})"]
+    networks:
+      - center-network
+
+volumes:
+  mongodbdata:
+
+networks:
+  center-network:
+    driver: bridge

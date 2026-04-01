@@ -2,10 +2,10 @@ services:
   # Backend Node.js - CENTER
   - type: web
     name: center-backend-nodejs
-    env: docker
+    runtime: docker
     dockerfilePath: ./Dockerfile
-    dockerContext: ./backend
-    region: oregon
+    dockerContext: .
+    region: frankfurt
     plan: free
     branch: main
     healthCheckPath: /api/server-info
@@ -13,18 +13,55 @@ services:
       - key: NODE_ENV
         value: production
       - key: PORT
-        value: 5000
-      - key: MONGODB_URI
+        value: "5000"
+      - key: USE_LOCAL_DB
+        value: "false"
+
+      # MongoDB Atlas
+      - key: MONGO_URI
         sync: false
+      - key: MONGO_USER
+        sync: false
+      - key: MONGO_PASSWORD
+        sync: false
+      - key: MONGO_DB_NAME
+        sync: false
+      - key: MONGO_CLUSTER
+        sync: false
+      - key: MONGO_HOSTS
+        sync: false
+
+      # Auth
       - key: JWT_SECRET
-        generateValue: true
-      - key: ADMIN_SECRET_KEY
-        generateValue: true
+        sync: false
+      - key: JWT_REFRESH_SECRET
+        sync: false
+
+      # Cloudinary
       - key: CLOUDINARY_CLOUD_NAME
         sync: false
       - key: CLOUDINARY_API_KEY
         sync: false
       - key: CLOUDINARY_API_SECRET
         sync: false
+      - key: CLOUDINARY_URL
+        sync: false
+
+      # Email
+      - key: EMAIL_USER
+        sync: false
+      - key: EMAIL_PASS
+        sync: false
+
+      # Firebase
+      - key: FIREBASE_SERVICE_ACCOUNT
+        sync: false
+
+      # Divers
+      - key: TAVILY_API_KEY
+        sync: false
+      - key: HF_TOKEN
+        sync: false
+
     autoDeploy: true
 

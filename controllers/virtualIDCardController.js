@@ -13,6 +13,13 @@ let baseUrl = null;
 // Imports nécessaires
 const axios = require('axios');
 const https = require('https');
+let cloudinaryModule = null;
+
+// Lazy-load cloudinary pour éviter les imports circulaires
+const getCloudinary = () => {
+  if (!cloudinaryModule) cloudinaryModule = require('../cloudynary');
+  return cloudinaryModule;
+};
 
 // Fonction pour initialiser les dépendances et modèles
 exports.initNotifications = (sendPush, sendEmail, url) => {
@@ -150,6 +157,16 @@ exports.createVirtualIDCard = async (req, res) => {
 
     // Créer la carte
     console.log('🏗️ Création de l\'objet VirtualIDCard...');
+
+    // Récupérer la photo de profil de l'utilisateur si pas de photo dédiée uploadée
+    if (!cardImageData.profilePhoto) {
+      const userRecord = await User.findById(req.user.userId).select('profileImage');
+      if (userRecord && userRecord.profileImage) {
+        cardImageData.profilePhoto = userRecord.profileImage;
+        console.log('📸 Photo de profil utilisateur incluse dans la carte:', userRecord.profileImage);
+      }
+    }
+
     const newCard = new VirtualIDCard({
       userId: req.user.userId,
       cardData: completeCardData,
@@ -1130,5 +1147,113 @@ exports.downloadVirtualIDCardPDF = async (req, res) => {
       message: 'Erreur lors du téléchargement du PDF',
       error: err.message
     });
+  }
+};
+/**
+ * Mettre a jour la photo de profil de la carte d'identite (upload Cloudinary)
+ */
+exports.updateCardPhoto = async (req, res) => {
+  try {
+    console.log('\n=== MISE A JOUR PHOTO CARTE D IDENTITE ===');
+    console.log('User ID:', req.user.userId);
+
+    const card = await VirtualIDCard.findOne({ userId: req.user.userId });
+    if (!card) {
+      return res.status(404).json({
+        success: false,
+        message: 'Carte d identite virtuelle non trouvee'
+      });
+    }
+
+    // Supprimer l ancienne photo Cloudinary si elle existe et a un publicId
+    if (card.cardImage && card.cardImage.profilePhotoPublicId) {
+      try {
+        const { deleteFromCloudinary } = getCloudinary();
+        await deleteFromCloudinary(card.cardImage.profilePhotoPublicId);
+        console.log('Ancienne photo supprimee de Cloudinary');
+      } catch (delErr) {
+        console.warn('Impossible de supprimer l ancienne photo Cloudinary:', delErr.message);
+      }
+    }
+
+    let newPhotoUrl = null;
+    let newPhotoPublicId = null;
+
+    if (req.file) {
+      // Photo uploadee via Cloudinary (via multer idCardPhotoUpload)
+      newPhotoUrl = req.file.path;
+      newPhotoPublicId = req.file.filename;
+      console.log('Nouvelle photo uploadee Cloudinary:', newPhotoUrl);
+    } else if (req.body.profilePhotoUrl) {
+      // URL directe (ex: la photo de profil deja sur Cloudinary)
+      newPhotoUrl = req.body.profilePhotoUrl;
+      console.log('Photo URL directe utilisee:', newPhotoUrl);
+    } else {
+      // Utiliser la photo de profil de l utilisateur
+      const userRecord = await User.findById(req.user.userId).select('profileImage');
+      if (userRecord && userRecord.profileImage) {
+        newPhotoUrl = userRecord.profileImage;
+        console.log('Photo de profil utilisateur utilisee:', newPhotoUrl);
+      } else {
+        return res.status(400).json({
+          success: false,
+          message: 'Aucune photo fournie et aucune photo de profil disponible'
+        });
+      }
+    }
+
+    // Mettre a jour le cardImage
+    if (!card.cardImage) card.cardImage = {};
+    card.cardImage.profilePhoto = newPhotoUrl;
+    if (newPhotoPublicId) card.cardImage.profilePhotoPublicId = newPhotoPublicId;
+    card.updatedAt = new Date();
+
+    await card.save();
+    console.log('Photo de carte mise a jour avec succes');
+
+    res.json({
+      success: true,
+      message: 'Photo de carte mise a jour avec succes',
+      profilePhoto: newPhotoUrl,
+      card: card
+    });
+  } catch (err) {
+    console.error('Erreur mise a jour photo carte:', err);
+    res.status(500).json({
+      success: false,
+      message: 'Erreur lors de la mise a jour de la photo de carte',
+      error: err.message
+    });
+  }
+};
+
+/**
+ * Synchroniser la photo de profil depuis le compte utilisateur vers la carte
+ */
+exports.syncProfilePhotoToCard = async (req, res) => {
+  try {
+    const card = await VirtualIDCard.findOne({ userId: req.user.userId });
+    if (!card) {
+      return res.status(404).json({ success: false, message: 'Carte non trouvee' });
+    }
+
+    const userRecord = await User.findById(req.user.userId).select('profileImage');
+    if (!userRecord || !userRecord.profileImage) {
+      return res.status(400).json({ success: false, message: 'Aucune photo de profil sur le compte' });
+    }
+
+    if (!card.cardImage) card.cardImage = {};
+    card.cardImage.profilePhoto = userRecord.profileImage;
+    card.updatedAt = new Date();
+    await card.save();
+
+    res.json({
+      success: true,
+      message: 'Photo synchronisee depuis votre profil',
+      profilePhoto: userRecord.profileImage,
+      card: card
+    });
+  } catch (err) {
+    res.status(500).json({ success: false, message: 'Erreur serveur', error: err.message });
   }
 };

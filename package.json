@@ -20,6 +20,7 @@
     "express": "^5.1.0",
     "firebase-admin": "^12.7.0",
     "form-data": "^4.0.4",
+    "busboy": "^1.6.0",
     "jsonwebtoken": "^9.0.2",
     "mongoose": "^8.19.2",
     "multer": "^2.0.2",

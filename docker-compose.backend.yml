@@ -1,0 +1,56 @@
+version: '3.8'
+
+# ============================================================
+# Backend CENTER - Permanent, auto-restart au boot Docker
+# Commandes :
+#   docker compose -f docker-compose.backend.yml up -d --build
+#   docker compose -f docker-compose.backend.yml down
+#   docker compose -f docker-compose.backend.yml logs -f
+# ============================================================
+
+services:
+
+  # ─── Backend Node.js ────────────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: center-backend
+    restart: always
+    ports:
+      - "5000:5000"
+    env_file:
+      - .env
+    volumes:
+      - uploads_data:/app/uploads
+    environment:
+      - NODE_ENV=production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/api/server-info || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    networks:
+      - center-net
+
+  # ─── Cloudflare Tunnel (URL publique gratuite) ──────────────────────────────
+  # URL change au redémarrage → relancer update-tunnel-url.ps1 pour mettre à jour
+  # server_config.dart automatiquement
+  cloudflare-tunnel:
+    image: cloudflare/cloudflared:latest
+    container_name: center-tunnel
+    restart: always
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: tunnel --no-autoupdate --url http://backend:5000
+    networks:
+      - center-net
+
+volumes:
+  uploads_data:
+
+networks:
+  center-net:
+    driver: bridge
