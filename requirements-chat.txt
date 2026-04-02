@@ -1,5 +1,6 @@
-# Chat Agent API - Python Dependencies
-# Installation: pip install -r requirements-chat.txt
+# Chat Agent API — Python Dependencies
+# PyTorch cu130 est installé séparément dans le Dockerfile via --index-url
+# Ne PAS ajouter torch ici (doublon avec Dockerfile)
 
 # Web Framework
 fastapi==0.115.6
@@ -17,7 +18,17 @@ PyMuPDF==1.24.14
 # Image Processing
 Pillow==11.0.0
 
-# Existing dependencies (should already be installed)
-transformers>=4.30.0
-torch>=2.0.0
+# Transformers + SmolVLM (vision-language model)
+transformers>=4.45.0
+accelerate>=0.26.0
+safetensors>=0.4.3
+
+# Quantisation 4-bit NF4 (bitsandbytes cu130)
+bitsandbytes>=0.44.0
+
+# Dépendances communes
 numpy>=1.24.0
+python-dotenv>=1.0.0
+
+# Recherche web (gratuit, sans clé API)
+ddgs>=9.0.0

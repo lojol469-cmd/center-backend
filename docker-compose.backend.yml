@@ -27,9 +27,13 @@ services:
       - uploads_data:/app/uploads
     environment:
       - NODE_ENV=production
-      # URLs des APIs Python (résolution interne Docker)
+      # URLs des APIs Python
       - MODERATION_API_URL=http://moderation-api:8001
-      - CHAT_AGENT_URL=http://chat-api:8002
+      # chat-api tourne sur la machine hôte (Python local cu130)
+      - CHAT_AGENT_URL=http://host.docker.internal:8002
+      # Serveur RTMP (nginx-rtmp dans Docker)
+      - RTMP_URL=rtmp://center-rtmp:1935/live
+      - HLS_BASE_URL=http://center-rtmp:8080/hls
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/api/server-info || exit 1"]
       interval: 20s
@@ -38,8 +42,6 @@ services:
       start_period: 30s
     depends_on:
       moderation-api:
-        condition: service_healthy
-      chat-api:
         condition: service_healthy
     networks:
       - center-net
@@ -83,8 +85,10 @@ services:
   # ─── API Python Chat Agent (FAISS + SentenceTransformer) ────────────────────
   # Utilisée par server.js pour le chat IA multimodal
   # Endpoint: POST /chat, POST /upload, GET /health
-  # Note: models/unified_agent.py est un stub — remplacez-le pour le LLM complet
+  # Modèle: SmolVLM-256M-Instruct 4-bit NF4 — lancé sur la machine hôte via START_CHAT_API.ps1
+  # Pour lancer en Docker: docker compose -f docker-compose.backend.yml --profile docker-chat up -d chat-api
   chat-api:
+    profiles: [docker-chat]
     build:
       context: .
       dockerfile: Dockerfile.chat
@@ -98,17 +102,32 @@ services:
       - SENTENCE_TRANSFORMERS_HOME=/models/cache
       - HF_HOME=/models/cache
       - CHAT_PORT=8002
+      # Chemin vers le modèle SmolVLM monté en bind mount
+      - SMOLVLM_MODEL_PATH=/models/smolvlm
     volumes:
       # Cache des modèles SentenceTransformer (téléchargés au 1er démarrage)
       - chat_models_cache:/models/cache
       # Mémoire FAISS persistante
       - chat_faiss_storage:/app/storage
+      # SmolVLM-256M-Instruct — modèle local en lecture seule
+      - type: bind
+        source: ../frontend-center/models--HuggingFaceTB--SmolVLM-256M-Instruct
+        target: /models/smolvlm
+        read_only: true
+    # GPU NVIDIA (CUDA 13.1 / cu130) — nécessite nvidia-container-toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
       interval: 30s
       timeout: 15s
       retries: 3
-      start_period: 120s
+      start_period: 180s
     networks:
       - center-net
 
@@ -127,7 +146,7 @@ services:
       - .env
     environment:
       - PYTHONUNBUFFERED=1
-      - MINILM_MODEL_PATH=/models/minilm
+      - MINILM_MODEL_PATH=/models/minilm/snapshots/c9745ed1d9f207416be6d2e6f8de32d1f16199bf
       - MONGO_URI=${MONGO_URI}
       - PORT_RECOMMEND=8003
     volumes:
@@ -141,6 +160,28 @@ services:
       timeout: 15s
       retries: 3
       start_period: 120s
+    networks:
+      - center-net
+
+  # ─── Serveur RTMP / HLS — streaming vidéo en direct ────────────────────────
+  # RTMP entrant (OBS/encodeur) : rtmp://<IP>:1935/live/<stream_key>
+  # HLS sortant (Flutter/lecteur) : http://<IP>:8080/hls/<stream_key>.m3u8
+  rtmp-server:
+    image: alfg/nginx-rtmp:latest
+    container_name: center-rtmp
+    restart: always
+    ports:
+      - "1935:1935"   # RTMP  – émetteurs (OBS, encodeur, FFMPEG)
+      - "8080:8080"   # HTTP  – segments HLS + stats
+    volumes:
+      - ./nginx-rtmp/nginx.conf:/etc/nginx/nginx.conf:ro
+      - rtmp_hls_data:/tmp/hls
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
     networks:
       - center-net
 
@@ -175,6 +216,7 @@ volumes:
   uploads_data:
   chat_models_cache:
   chat_faiss_storage:
+  rtmp_hls_data:
 
 networks:
   center-net:

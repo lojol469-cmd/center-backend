@@ -308,7 +308,12 @@ router.post('/live/start', verifyToken, async (req, res) => {
       started_at: new Date(),
     });
 
-    res.status(201).json({ success: true, live, stream_key: streamKey });
+    // URLs RTMP/HLS — utilisées par OBS et le lecteur Flutter
+    const rtmpHost = process.env.RTMP_PUBLIC_HOST || 'localhost';
+    const rtmpUrl  = `rtmp://${rtmpHost}:1935/live/${streamKey}`;
+    const hlsUrl   = `http://${rtmpHost}:8080/hls/${streamKey}.m3u8`;
+
+    res.status(201).json({ success: true, live, liveId: live._id, stream_key: streamKey, rtmpUrl, hlsUrl });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }
@@ -351,7 +356,13 @@ router.get('/live/status', verifyToken, async (req, res) => {
       author: req.userId,
       status: { $in: ['waiting', 'live'] },
     });
-    res.json({ success: true, live: live || null, is_live: !!live });
+    let rtmpUrl = null, hlsUrl = null;
+    if (live?.stream_key) {
+      const rtmpHost = process.env.RTMP_PUBLIC_HOST || 'localhost';
+      rtmpUrl = `rtmp://${rtmpHost}:1935/live/${live.stream_key}`;
+      hlsUrl  = `http://${rtmpHost}:8080/hls/${live.stream_key}.m3u8`;
+    }
+    res.json({ success: true, live: live || null, is_live: !!live, rtmpUrl, hlsUrl });
   } catch (err) {
     res.status(500).json({ success: false, message: err.message });
   }

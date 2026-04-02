@@ -20,6 +20,7 @@ COPY cloudynary.js ./
 COPY middleware/ ./middleware/
 COPY routes/ ./routes/
 COPY controllers/ ./controllers/
+COPY models/ ./models/
 
 RUN mkdir -p uploads storage/temp
 

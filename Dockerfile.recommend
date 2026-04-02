@@ -9,7 +9,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 # Copier et installer les dépendances Python
 COPY requirements-recommend.txt .
-RUN pip install --no-cache-dir -r requirements-recommend.txt
+RUN pip install --no-cache-dir --timeout 300 -r requirements-recommend.txt
 
 # Copier le code de l'API
 COPY food_recommend_api.py .

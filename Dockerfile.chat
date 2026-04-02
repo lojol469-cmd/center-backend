@@ -1,35 +1,49 @@
-FROM python:3.11-slim
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 LABEL maintainer="SETRAF Center"
-LABEL description="Chat Agent API — FAISS + SentenceTransformer + Multimodal"
+LABEL description="Chat Agent API — SmolVLM-256M-Instruct 4-bit NF4 + FAISS (cu128 / CUDA 12.8)"
 
 WORKDIR /app
 
-# Dépendances système pour torch, PIL, PyMuPDF
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# Python 3.11 + dépendances système
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
     libgomp1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender-dev \
-    && rm -rf /var/lib/apt/lists/*
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && python3 -m pip install --upgrade pip
 
-# Installer les dépendances Python
+# PyTorch cu128 (CUDA 12.8) installé séparément pour profiter du cache Docker
+RUN pip install --no-cache-dir --timeout 300 \
+    torch torchvision \
+    --index-url https://download.pytorch.org/whl/cu128
+
+# Dépendances Python (transformers, bitsandbytes, accelerate, faiss, etc.)
 COPY requirements-chat.txt .
-RUN pip install --no-cache-dir --upgrade pip \
-    && pip install --no-cache-dir -r requirements-chat.txt
+RUN pip install --no-cache-dir --timeout 300 -r requirements-chat.txt
 
-# Copier le code de l'agent
+# Code de l'API
 COPY chat_agent_api.py .
 
-# Copier le stub unified_agent (remplacer par l'implémentation complète si disponible)
+# Agent SmolVLM (unified_agent.py + __init__.py si nécessaire)
 COPY models/ ./models/
 
 # ── Variables d'environnement ──────────────────────────────────────────────
-# Modèle SentenceTransformer monté en volume
 ENV SENTENCE_TRANSFORMERS_HOME=/models/cache
 ENV HF_HOME=/models/cache
 ENV CHAT_PORT=8002
+# Chemin vers le modèle SmolVLM monté en volume
+ENV SMOLVLM_MODEL_PATH=/models/smolvlm
 
 # Répertoire de stockage mémoire FAISS
 RUN mkdir -p /app/storage/chat_memory
@@ -38,8 +52,7 @@ VOLUME ["/models"]
 
 EXPOSE 8002
 
-# Healthcheck
-HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=3 \
+HEALTHCHECK --interval=30s --timeout=15s --start-period=180s --retries=3 \
     CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')" || exit 1
 
-CMD ["uvicorn", "chat_agent_api:app", "--host", "0.0.0.0", "--port", "8002", "--log-level", "info"]
+CMD ["python", "-m", "uvicorn", "chat_agent_api:app", "--host", "0.0.0.0", "--port", "8002", "--log-level", "info"]

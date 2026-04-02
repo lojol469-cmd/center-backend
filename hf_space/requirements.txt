@@ -1,0 +1,30 @@
+# Kibali Chat Agent API — HuggingFace Space
+# FastAPI + SmolVLM-256M-Instruct + FAISS + DuckDuckGo
+
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+# Vision & LLM
+transformers>=5.0.0
+accelerate>=0.26.0
+safetensors>=0.4.3
+bitsandbytes>=0.44.0
+
+# Embeddings & FAISS
+sentence-transformers>=3.0.0
+faiss-cpu>=1.7.0
+
+# PDF processing
+PyPDF2==3.0.1
+PyMuPDF==1.24.14
+
+# Image processing
+Pillow>=10.0.0
+
+# Search
+ddgs>=9.0.0
+
+# Utilities
+numpy>=1.24.0
+torch>=2.0.0

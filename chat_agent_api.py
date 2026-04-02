@@ -52,16 +52,25 @@ from unified_agent import UnifiedAgent
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Import Tavily pour recherche internet
+# Import DuckDuckGo pour recherche internet (gratuit, sans clé API)
 try:
-    from tavily import TavilyClient
-    tavily_client = TavilyClient(api_key=os.getenv("TAVILY_API_KEY"))
-    TAVILY_AVAILABLE = True
-    logger.info("✅ Tavily initialisé")
+    from ddgs import DDGS
+    _ddgs_test = DDGS()
+    WEB_SEARCH_AVAILABLE = True
+    logger.info("✅ DuckDuckGo Search initialisé (gratuit, sans clé API)")
 except Exception as e:
-    TAVILY_AVAILABLE = False
-    tavily_client = None
-    logger.warning(f"⚠️ Tavily non disponible: {e}")
+    WEB_SEARCH_AVAILABLE = False
+    logger.warning(f"⚠️ DuckDuckGo Search non disponible: {e}")
+
+def _duckduckgo_search(query: str, max_results: int = 5) -> list:
+    """Recherche web via DuckDuckGo (gratuit, sans clé API)."""
+    try:
+        with DDGS() as ddgs:
+            results = list(ddgs.text(query, max_results=max_results))
+        return results
+    except Exception as e:
+        logger.warning(f"⚠️ DuckDuckGo search échouée: {e}")
+        return []
 
 # Configuration
 logging.basicConfig(level=logging.INFO)
@@ -82,7 +91,7 @@ REASONING_PROMPT = """Raisonne étape par étape. Décompose le problème, analy
 et donne une réponse logique et structurée. Sois concis mais complet."""
 
 SEARCH_PROMPT = """Recherche des informations précises et récentes sur ce sujet. 
-Utilise Tavily pour trouver des sources fiables. Résume les points clés en 3-5 phrases maximum."""
+Utilise DuckDuckGo pour trouver des sources fiables. Résume les points clés en 3-5 phrases maximum."""
 
 EXPLAIN_APP_PROMPT = """Tu es un guide expert de l'application CENTER. 
 L'application CENTER est une plateforme de gestion d'employés avec:
@@ -176,8 +185,15 @@ class FAISSMemoryManager:
     
     def __init__(self, embedding_model: str = "sentence-transformers/all-MiniLM-L6-v2"):
         try:
-            # Essayer de charger le modèle depuis le cache local
-            self.embedding_model = SentenceTransformer(embedding_model, local_files_only=True)
+            # Résoudre le chemin local du modèle (snapshot HuggingFace)
+            _local_cache = Path(__file__).parent.parent / "frontend-center" / "models--sentence-transformers--all-MiniLM-L6-v2"
+            _resolved_path = embedding_model
+            if _local_cache.is_dir():
+                _snapshots = list((_local_cache / "snapshots").iterdir()) if (_local_cache / "snapshots").is_dir() else []
+                if _snapshots:
+                    _resolved_path = str(sorted(_snapshots)[-1])
+                    logger.info(f"📂 SentenceTransformer local: {_resolved_path}")
+            self.embedding_model = SentenceTransformer(_resolved_path, local_files_only=True)
         except Exception as e:
             logger.warning(f"⚠️ Impossible de charger le modèle d'embeddings: {e}")
             logger.info("ℹ️ Fonctionnement sans recherche vectorielle FAISS")
@@ -315,9 +331,9 @@ class ChatAgentManager:
         # Désactiver temporairement les modèles lourds pour permettre le démarrage rapide
         self.agent = UnifiedAgent(
             enable_voice=False,
-            enable_vision=False,
+            enable_vision=True,
             enable_detection=False,
-            enable_llm=False
+            enable_llm=True
         )
         self.memory = FAISSMemoryManager()
         
@@ -462,7 +478,7 @@ class ChatAgentManager:
                         temp_path.parent.mkdir(parents=True, exist_ok=True)
                         image.save(temp_path)
                         
-                        # UTILISER TOUS LES OUTILS: SmolVLM + YOLO + Mistral + Tavily
+                        # UTILISER TOUS LES OUTILS: SmolVLM + YOLO + Mistral + DuckDuckGo
                         analysis = self.agent.process_image(
                             image_path=str(temp_path),
                             question=description or "Analyse cette image en détail avec tous les objets visibles.",
@@ -762,7 +778,7 @@ class ChatAgentManager:
         Pipeline intelligent:
         1. Détection d'intention → Type de réponse nécessaire
         2. FAISS (Mémoire) → Documents/images similaires du passé
-        3. Tavily (Web) → Recherche internet en temps réel si nécessaire
+        3. DuckDuckGo (Web) → Recherche internet en temps réel si nécessaire
         4. SmolVLM + YOLO → Analyse visuelle si contexte pertinent
         5. Mistral-7B (LLM) → Synthèse intelligente avec tous les outils
         """
@@ -840,7 +856,7 @@ class ChatAgentManager:
                 history_text += f"{msg.role}: {msg.content}\n"
         
         # ========================================
-        # ÉTAPE 6: RECHERCHE WEB TAVILY (Si nécessaire)
+        # ÉTAPE 6: RECHERCHE WEB DUCKDUCKGO (Si nécessaire)
         # ========================================
         web_search_context = ""
         
@@ -858,27 +874,23 @@ class ChatAgentManager:
             ])
         )
         
-        if needs_web_search and TAVILY_AVAILABLE and tavily_client:
+        if needs_web_search and WEB_SEARCH_AVAILABLE:
             try:
-                logger.info(f"🌐 [Tavily] Recherche internet: '{message[:60]}...'")
-                search_results = tavily_client.search(
-                    query=message, 
-                    max_results=3,
-                    search_depth="basic"
-                )
+                logger.info(f"🌐 [DuckDuckGo] Recherche internet: '{message[:60]}...'")
+                ddg_results = _duckduckgo_search(message, max_results=5)
                 
-                if search_results.get("results"):
-                    web_search_context = "\n🌐 RECHERCHE INTERNET (Tavily):\n"
-                    for i, result in enumerate(search_results.get("results", [])[:3], 1):
+                if ddg_results:
+                    web_search_context = "\n🌐 RECHERCHE INTERNET (DuckDuckGo):\n"
+                    for i, result in enumerate(ddg_results[:5], 1):
                         title = result.get('title', 'N/A')
-                        content = result.get('content', '')[:200]
-                        url = result.get('url', '')
+                        content = result.get('body', '')[:200]
+                        url = result.get('href', '')
                         web_search_context += f"{i}. {title}\n   {content}...\n   Source: {url}\n\n"
                     
-                    tools_used.append(f"Tavily ({len(search_results.get('results', []))} résultats)")
-                    logger.info(f"   ✓ {len(search_results.get('results', []))} résultats trouvés")
+                    tools_used.append(f"DuckDuckGo ({len(ddg_results)} résultats)")
+                    logger.info(f"   ✓ {len(ddg_results)} résultats trouvés")
             except Exception as e:
-                logger.warning(f"⚠️ Recherche Tavily échouée: {e}")
+                logger.warning(f"⚠️ Recherche DuckDuckGo échouée: {e}")
         
         # ========================================
         # ÉTAPE 7: CONSTRUIRE PROMPT ENRICHI AVEC TOUS LES OUTILS
@@ -938,7 +950,7 @@ Réponds de manière naturelle et concise."""
         # ========================================
         # ÉTAPE 8: GÉNÉRATION AVEC MISTRAL-7B (OU RÉPONSE PAR DÉFAUT)
         # ========================================
-        if "llm" in self.tools and self.tools["llm"].is_ready:
+        if "llm" in self.agent.tools and self.agent.tools["llm"].is_ready:
             logger.info("🧠 [Mistral-7B] Génération de réponse avec tous les contextes...")
             agent_result = self.agent.chat(
                 message=full_message,
@@ -1033,6 +1045,11 @@ async def root():
             "stats": "/stats"
         }
     }
+
+@app.get("/health")
+async def health():
+    """Health check endpoint"""
+    return {"status": "ok"}
 
 @app.post("/upload")
 async def upload_file(
