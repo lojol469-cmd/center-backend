@@ -29,6 +29,32 @@ services:
     networks:
       - center-network
 
+  food-recommend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.recommend
+    container_name: food-recommend-api
+    image: food-recommend-api:latest
+    ports:
+      - "8003:8003"
+    volumes:
+      # Monter le modèle MiniLM depuis l'hôte (dossier du projet frontend)
+      - ../frontend-center/models--sentence-transformers--all-MiniLM-L6-v2:/app/models/all-MiniLM-L6-v2:ro
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MINILM_MODEL_PATH=/app/models/all-MiniLM-L6-v2
+      - MONGO_URI=${MONGO_URI:-mongodb://127.0.0.1:27017/myDatabase60}
+      - PORT_RECOMMEND=8003
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8003/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
+    networks:
+      - center-network
+
 networks:
   center-network:
     driver: bridge

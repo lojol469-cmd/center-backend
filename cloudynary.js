@@ -278,6 +278,45 @@ const virtualIDCardUpload = multer({
 });
 
 // ========================================
+// CONFIGURATION POUR STUDIO CRÉATION (Vidéos HD + Thumbnails)
+// ========================================
+const studioVideoStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: async (req, file) => {
+        const isVideo = file.mimetype.startsWith('video/');
+        const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+        return {
+            folder: isVideo ? 'center-app/studio/videos' : 'center-app/studio/thumbnails',
+            resource_type: 'auto',
+            allowed_formats: isVideo
+                ? ['mp4', 'avi', 'mov', 'wmv', 'webm', 'mkv', 'flv', 'm4v']
+                : ['jpg', 'jpeg', 'png', 'gif', 'webp'],
+            transformation: isVideo
+                ? [{ quality: 'auto:good', fetch_format: 'mp4' }]
+                : [{ width: 1280, height: 720, crop: 'fill', quality: 'auto:good' }],
+            public_id: (isVideo ? 'studio-video-' : 'studio-thumb-') + uniqueSuffix,
+        };
+    },
+});
+
+const studioUpload = multer({
+    storage: studioVideoStorage,
+    limits: { fileSize: 500 * 1024 * 1024 }, // 500MB pour vidéos
+    fileFilter: (req, file, cb) => {
+        const allowed = [
+            'video/mp4', 'video/avi', 'video/mov', 'video/wmv', 'video/webm',
+            'video/mkv', 'video/flv', 'video/x-msvideo', 'video/quicktime',
+            'image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'image/gif',
+        ];
+        if (allowed.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Format non supporté pour le studio'), false);
+        }
+    }
+});
+
+// ========================================
 // FONCTION DE SUPPRESSION
 // ========================================
 const deleteFromCloudinary = async (publicId) => {
@@ -315,6 +354,7 @@ module.exports = {
     employeeUpload,
     virtualIDCardUpload,
     idCardPhotoUpload,
+    studioUpload,
     deleteFromCloudinary,
     getOptimizedUrl,
     getTransformedUrl

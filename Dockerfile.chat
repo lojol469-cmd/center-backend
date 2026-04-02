@@ -1,0 +1,45 @@
+FROM python:3.11-slim
+
+LABEL maintainer="SETRAF Center"
+LABEL description="Chat Agent API — FAISS + SentenceTransformer + Multimodal"
+
+WORKDIR /app
+
+# Dépendances système pour torch, PIL, PyMuPDF
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgomp1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+# Installer les dépendances Python
+COPY requirements-chat.txt .
+RUN pip install --no-cache-dir --upgrade pip \
+    && pip install --no-cache-dir -r requirements-chat.txt
+
+# Copier le code de l'agent
+COPY chat_agent_api.py .
+
+# Copier le stub unified_agent (remplacer par l'implémentation complète si disponible)
+COPY models/ ./models/
+
+# ── Variables d'environnement ──────────────────────────────────────────────
+# Modèle SentenceTransformer monté en volume
+ENV SENTENCE_TRANSFORMERS_HOME=/models/cache
+ENV HF_HOME=/models/cache
+ENV CHAT_PORT=8002
+
+# Répertoire de stockage mémoire FAISS
+RUN mkdir -p /app/storage/chat_memory
+
+VOLUME ["/models"]
+
+EXPOSE 8002
+
+# Healthcheck
+HEALTHCHECK --interval=30s --timeout=15s --start-period=120s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')" || exit 1
+
+CMD ["uvicorn", "chat_agent_api:app", "--host", "0.0.0.0", "--port", "8002", "--log-level", "info"]

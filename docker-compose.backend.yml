@@ -5,7 +5,9 @@ version: '3.8'
 # Commandes :
 #   docker compose -f docker-compose.backend.yml up -d --build
 #   docker compose -f docker-compose.backend.yml down
-#   docker compose -f docker-compose.backend.yml logs -f
+#   docker compose -f docker-compose.backend.yml logs -f backend
+#   docker compose -f docker-compose.backend.yml logs -f moderation-api
+#   docker compose -f docker-compose.backend.yml logs -f chat-api
 # ============================================================
 
 services:
@@ -25,21 +27,127 @@ services:
       - uploads_data:/app/uploads
     environment:
       - NODE_ENV=production
+      # URLs des APIs Python (résolution interne Docker)
+      - MODERATION_API_URL=http://moderation-api:8001
+      - CHAT_AGENT_URL=http://chat-api:8002
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/api/server-info || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
       start_period: 30s
+    depends_on:
+      moderation-api:
+        condition: service_healthy
+      chat-api:
+        condition: service_healthy
     networks:
       - center-net
 
-  # ─── Cloudflare Tunnel (URL publique gratuite) ──────────────────────────────
-  # URL change au redémarrage → relancer update-tunnel-url.ps1 pour mettre à jour
-  # server_config.dart automatiquement
-  cloudflare-tunnel:
+  # ─── API Python Modération (MiniLM-L6-v2) ───────────────────────────────────
+  # Utilisée par routes/creation.js pour modérer le contenu et scorer les posts
+  # Endpoint: POST /moderate, POST /algorithm/score, GET /health
+  moderation-api:
+    build:
+      context: ./moderation_api
+      dockerfile: Dockerfile
+    container_name: center-moderation-api
+    restart: always
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      # Priorité 1 : volume Docker (snapshot local monté)
+      - MINILM_MODEL_PATH=/models/minilm/snapshots/c9745ed1d9f207416be6d2e6f8de32d1f16199bf
+      # Si le snapshot n'existe pas à ce chemin exact, _find_model_path()
+      # tente MODEL_CACHE_DIR puis télécharge depuis HuggingFace
+      - MODEL_CACHE_DIR=/models
+      - MODERATION_PORT=8001
+    volumes:
+      # Monter le modèle local en lecture seule
+      # Le dossier models--sentence-transformers--all-MiniLM-L6-v2 est dans frontend-center/
+      - type: bind
+        source: ../frontend-center/models--sentence-transformers--all-MiniLM-L6-v2
+        target: /models/minilm
+        read_only: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8001/health')"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 90s
+    networks:
+      - center-net
+
+  # ─── API Python Chat Agent (FAISS + SentenceTransformer) ────────────────────
+  # Utilisée par server.js pour le chat IA multimodal
+  # Endpoint: POST /chat, POST /upload, GET /health
+  # Note: models/unified_agent.py est un stub — remplacez-le pour le LLM complet
+  chat-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.chat
+    container_name: center-chat-api
+    restart: always
+    ports:
+      - "8002:8002"
+    env_file:
+      - .env
+    environment:
+      - SENTENCE_TRANSFORMERS_HOME=/models/cache
+      - HF_HOME=/models/cache
+      - CHAT_PORT=8002
+    volumes:
+      # Cache des modèles SentenceTransformer (téléchargés au 1er démarrage)
+      - chat_models_cache:/models/cache
+      # Mémoire FAISS persistante
+      - chat_faiss_storage:/app/storage
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8002/health')"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    networks:
+      - center-net
+
+  # ─── API Python Recommandation (MiniLM-L6-v2 food recommend) ───────────────
+  # Utilisée par Flutter via /recommend/restaurants et /recommend/search
+  # Endpoint: GET /recommend/restaurants, GET /recommend/search, GET /health
+  food-recommend-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.recommend
+    container_name: center-food-recommend
+    restart: always
+    ports:
+      - "8003:8003"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - MINILM_MODEL_PATH=/models/minilm
+      - MONGO_URI=${MONGO_URI}
+      - PORT_RECOMMEND=8003
+    volumes:
+      - type: bind
+        source: ../frontend-center/models--sentence-transformers--all-MiniLM-L6-v2
+        target: /models/minilm
+        read_only: true
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8003/health')"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 120s
+    networks:
+      - center-net
+
+  # ─── Cloudflare Tunnel (fonctionne partout - hotspot + WiFi) ────────────────
+  tunnel-cloudflare:
     image: cloudflare/cloudflared:latest
-    container_name: center-tunnel
+    container_name: center-tunnel-cf
     restart: always
     depends_on:
       backend:
@@ -48,8 +156,25 @@ services:
     networks:
       - center-net
 
+  # ─── ngrok Tunnel (URL FIXE - fonctionne sur WiFi uniquement) ───────────────
+  # URL fixe permanente : https://macabrely-subsatirical-ayana.ngrok-free.dev
+  tunnel-ngrok:
+    image: ngrok/ngrok:latest
+    container_name: center-tunnel-ngrok
+    restart: always
+    depends_on:
+      backend:
+        condition: service_healthy
+    command: http --domain=macabrely-subsatirical-ayana.ngrok-free.dev http://backend:5000
+    environment:
+      - NGROK_AUTHTOKEN=${NGROK_AUTHTOKEN}
+    networks:
+      - center-net
+
 volumes:
   uploads_data:
+  chat_models_cache:
+  chat_faiss_storage:
 
 networks:
   center-net:

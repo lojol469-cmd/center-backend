@@ -2,9 +2,17 @@
 # .dockerignore - Backend Node.js CENTER
 # ========================================
 # EXCLUSION: Fichiers lourds et inutiles pour le déploiement
+#
+# Note: Dockerfile.chat et la moderation_api/ ont leurs propres contextes.
+# Ce fichier gouverne le build context du Dockerfile Node.js principal
+# ET de Dockerfile.chat (même répertoire racine).
+#
+# Les exceptions !chat_agent_api.py etc. permettent à Dockerfile.chat
+# d'accéder aux fichiers Python sans affecter l'image Node.js
+# (le Dockerfile Node.js ne COPY pas ces fichiers).
 
 # ========================================
-# PYTHON - TOUT EXCLURE (inutile pour Node.js)
+# PYTHON - TOUT EXCLURE sauf les fichiers nécessaires à Dockerfile.chat
 # ========================================
 *.py
 *.pyc
@@ -16,7 +24,6 @@ __pycache__/
 *.so
 .Python
 *.egg-info/
-chat_agent_api.py
 requirements*.txt
 venv/
 env/
@@ -24,6 +31,16 @@ ENV/
 .venv
 pip-log.txt
 .pytest_cache/
+
+# ── Exceptions pour Dockerfile.chat ──────────────────────────────────────
+!chat_agent_api.py
+!requirements-chat.txt
+!models/*.py
+!models/unified_agent.py
+
+# ── Exceptions pour Dockerfile.recommend ─────────────────────────────────
+!food_recommend_api.py
+!requirements-recommend.txt
 
 # ========================================
 # DOSSIERS LOURDS - IA/ML (EXCLURE)

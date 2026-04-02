@@ -1,0 +1,6 @@
+{
+  "venvPath": "../frontend-center",
+  "venv": "environment",
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "off"
+}

@@ -1,0 +1,22 @@
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Installer les dépendances système (pour scikit-learn / sentence-transformers)
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copier et installer les dépendances Python
+COPY requirements-recommend.txt .
+RUN pip install --no-cache-dir -r requirements-recommend.txt
+
+# Copier le code de l'API
+COPY food_recommend_api.py .
+
+# Le modèle MiniLM est monté en volume au runtime (voir docker-compose.backend.yml)
+# MINILM_MODEL_PATH=/models/minilm  (bind mount depuis frontend-center/models--..)
+
+EXPOSE 8003
+
+CMD ["uvicorn", "food_recommend_api:app", "--host", "0.0.0.0", "--port", "8003"]

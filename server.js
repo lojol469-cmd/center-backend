@@ -13,6 +13,7 @@ const os = require('os');
 const dns = require('dns').promises;
 const { WebSocketServer } = require('ws');
 const admin = require('firebase-admin');
+const NodeMediaServer = require('node-media-server');
 // Use global fetch (Node 18+) — no node-fetch dependency required
 const { 
   uploadCloudinary, 
@@ -235,6 +236,11 @@ app.use(express.json());
 
 // Servir les fichiers statiques (uploads) - Backup local uniquement
 app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+
+// ── HLS segments (générés par node-media-server) ────────────────────────────
+const HLS_DIR = path.join(__dirname, 'tmp', 'live');
+if (!fs.existsSync(HLS_DIR)) fs.mkdirSync(HLS_DIR, { recursive: true });
+app.use('/hls', express.static(HLS_DIR, { maxAge: '0' }));
 
 // ========================================
 // CONFIGURATION CLOUDINARY - PRIORITAIRE
@@ -2493,11 +2499,16 @@ app.post('/api/publications/:id/like', verifyToken, async (req, res) => {
 
   // Broadcast via WebSocket
   if (typeof broadcastToAll === 'function') {
+    const _broadcastLikerInfo = isLiking ? await User.findById(req.user.userId).select('name profileImage').lean() : null;
     broadcastToAll({
       type: 'publication_like',
       publicationId: pub._id.toString(),
       likesCount: pub.likes.length,
-      isLiked: isLiking
+      isLiked: isLiking,
+      likerName: _broadcastLikerInfo?.name || '',
+      likerImage: _broadcastLikerInfo?.profileImage || '',
+      publicationPreview: pub.content?.substring(0, 80) || '',
+      publicationImage: pub.media?.find?.(m => m.type === 'image')?.url || null
     });
   }
 
@@ -2659,12 +2670,18 @@ app.post('/api/publications/:id/comments', verifyToken, commentUpload.array('med
 
     const formattedComment = addedComment.toObject();
 
-    // 🔥 Broadcast via WebSocket
+    // 🔥 Broadcast via WebSocket (enrichi avec preview de la publication)
+    const _broadcastPubPreview = pub.content?.substring(0, 80) || '';
+    const _broadcastPubImage = pub.media?.find?.(m => m.type === 'image')?.url || null;
     if (typeof broadcastToAll === 'function') {
       broadcastToAll({
         type: 'new_comment',
         publicationId: req.params.id,
-        comment: formattedComment
+        comment: formattedComment,
+        commenterName: formattedComment.userId?.name || 'Utilisateur',
+        commenterImage: formattedComment.userId?.profileImage || '',
+        publicationPreview: _broadcastPubPreview,
+        publicationImage: _broadcastPubImage
       });
     }
 
@@ -4155,6 +4172,70 @@ app.post('/api/admin/fix-employee-names', verifyToken, async (req, res) => {
 const virtualIDCardRoutes = require('./routes/virtualIDCard');
 app.use('/api/virtual-id-cards', virtualIDCardRoutes);
 
+// ========================================
+// ROUTES : STUDIO CRÉATION + MONÉTISATION
+// ========================================
+
+const creationRoutes = require('./routes/creation');
+app.use('/api/studio', creationRoutes);
+
+const monetizationRoutes = require('./routes/monetization');
+app.use('/api/wallet', monetizationRoutes);
+
+const foodRoutes = require('./routes/food');
+app.use('/api/food', foodRoutes);
+
+const ordersRoutes = require('./routes/orders');
+app.use('/api/orders', ordersRoutes);
+
+const capacityRoutes = require('./routes/capacity');
+app.use('/api/capacity', capacityRoutes);
+
+const loyaltyRoutes = require('./routes/loyalty');
+app.use('/api/loyalty', loyaltyRoutes);
+
+const livestreamRoutes = require('./routes/livestream');
+app.use('/api/livestream', livestreamRoutes);
+
+console.log('✅ Routes Studio + Wallet + Food + Orders + Capacity + Loyalty + Livestream enregistrées');
+
+// ── Node Media Server (RTMP → HLS) ──────────────────────────────────────────
+const nmsConfig = {
+  rtmp: {
+    port:         1935,
+    chunk_size:   60000,
+    gop_cache:    true,
+    ping:         30,
+    ping_timeout: 60,
+  },
+  http: {
+    port:       8085,
+    mediaroot:  './tmp',
+    allow_origin: '*',
+  },
+  trans: {
+    ffmpeg: process.env.FFMPEG_PATH || 'ffmpeg',
+    tasks: [
+      {
+        app:  'live',
+        hls:  true,
+        hlsFlags: '[hls_time=2:hls_list_size=3:hls_flags=delete_segments]',
+        dash: false,
+      },
+    ],
+  },
+};
+
+const nms = new NodeMediaServer(nmsConfig);
+nms.run();
+console.log('📡 Node Media Server démarré — RTMP :1935 / HLS via Express /hls');
+
+// ── Tâche périodique : expirer priorités restaurants toutes les heures ───
+setInterval(() => {
+  const { expirePriorities } = require('./routes/food');
+  expirePriorities().catch(() => {});
+}, 60 * 60 * 1000);
+
 const PORT = process.env.PORT || 5000;
 const HOST = '0.0.0.0';
 
@@ -4185,10 +4266,13 @@ const server = app.listen(PORT, HOST, () => {
 
 const wss = new WebSocketServer({ server });
 const clients = new Map(); // Map<userId, WebSocket>
+// Tracking livraison : Map<orderId, Set<WebSocket>> — clients qui suivent une commande
+const orderWatchers = new Map();
 
 wss.on('connection', (ws) => {
   console.log('🔌 Nouvelle connexion WebSocket');
   let userId = null;
+  const watchedOrders = new Set(); // ordres que ce client surveille
 
   ws.on('message', (message) => {
     try {
@@ -4198,7 +4282,7 @@ wss.on('connection', (ws) => {
       if (data.type === 'auth' && data.token) {
         try {
           const decoded = jwt.verify(data.token, process.env.JWT_SECRET);
-          userId = decoded.userId; // Utiliser userId au lieu de id
+          userId = decoded.userId;
           clients.set(userId, ws);
           console.log(`✅ Client authentifié: ${decoded.email || userId}`);
           
@@ -4217,12 +4301,106 @@ wss.on('connection', (ws) => {
         }
       }
       
-      // Abonnement à un canal
+      // ─── TRACKING LIVRAISON : client rejoint le suivi d'une commande ───
+      else if (data.type === 'join_order' && data.orderId) {
+        const oid = data.orderId;
+        if (!orderWatchers.has(oid)) orderWatchers.set(oid, new Set());
+        orderWatchers.get(oid).add(ws);
+        watchedOrders.add(oid);
+        console.log(`📍 Client rejoint suivi commande: ${oid}`);
+        ws.send(JSON.stringify({ type: 'joined_order', orderId: oid }));
+      }
+
+      // ─── TRACKING LIVRAISON : client quitte le suivi ───────────────────
+      else if (data.type === 'leave_order' && data.orderId) {
+        const oid = data.orderId;
+        orderWatchers.get(oid)?.delete(ws);
+        watchedOrders.delete(oid);
+      }
+
+      // ─── LIVREUR envoie sa position GPS + capteurs ──────────────────────
+      else if (data.type === 'delivery_location' && data.orderId) {
+        const { orderId, lat, lng, speed, heading, accuracy, sensors } = data;
+        console.log(`🚴 Position livreur: orderId=${orderId} lat=${lat} lng=${lng} spd=${speed}km/h`);
+
+        const payload = JSON.stringify({
+          type: 'delivery_update',
+          orderId,
+          lat: parseFloat(lat),
+          lng: parseFloat(lng),
+          speed: parseFloat(speed) || 0,
+          heading: parseFloat(heading) || 0,
+          accuracy: parseFloat(accuracy) || 10,
+          sensors: sensors || {},
+          timestamp: new Date().toISOString(),
+        });
+
+        // Diffuser à tous les watchers de cette commande
+        const watchers = orderWatchers.get(orderId);
+        if (watchers) {
+          watchers.forEach(watcher => {
+            if (watcher !== ws && watcher.readyState === 1) {
+              watcher.send(payload);
+            }
+          });
+        }
+      }
+
+      // ─── REJOINDRE RESTAURANT (pour mises à jour stock en live) ────────
+      else if (data.type === 'join_restaurant' && data.restaurantId) {
+        ws.restaurantId = data.restaurantId;
+        ws.send(JSON.stringify({ type: 'joined_restaurant', restaurantId: data.restaurantId }));
+      }
+
+      // ─── REJOINDRE LE LIVE D'UN RESTAURANT (viewer) ──────────────────────
+      else if (data.type === 'join_live' && data.restaurantId) {
+        ws.liveRestaurantId = data.restaurantId;
+        ws.restaurantId     = data.restaurantId;  // partage le même tag pour le chat
+        ws.send(JSON.stringify({ type: 'joined_live', restaurantId: data.restaurantId }));
+        console.log(`📺 Viewer rejoint live: ${data.restaurantId}`);
+      }
+
+      // ─── QUITTER LE LIVE ─────────────────────────────────────────────────
+      else if (data.type === 'leave_live') {
+        ws.liveRestaurantId = null;
+      }
+
+      // ─── CHAT LIVE RESTAURANT — avec filtrage anti-bypass ───────────────
+      else if (data.type === 'live_chat' && data.restaurantId && data.message) {
+        // Patterns à bloquer : numéros de téléphone, liens HTTP/HTTPS
+        const PHONE_RE  = /(\+?\d[\d\s\-().]{6,}\d)/g;
+        const URL_RE    = /https?:\/\/\S+/gi;
+        const SOCIAL_RE = /(@\w{3,}|wa\.me|t\.me|bit\.ly|tinyurl)/gi;
+
+        const raw = String(data.message).trim();
+        if (PHONE_RE.test(raw) || URL_RE.test(raw) || SOCIAL_RE.test(raw)) {
+          ws.send(JSON.stringify({
+            type:    'chat_blocked',
+            reason:  'Les numéros de téléphone, liens et contacts externes sont interdits dans le chat.',
+          }));
+        } else {
+          // Diffuser le message à tous les clients regardant ce restaurant
+          const chatPayload = JSON.stringify({
+            type:         'live_chat_message',
+            restaurantId: data.restaurantId,
+            userId:       userId || 'anonymous',
+            message:      raw.slice(0, 300),   // limite 300 chars
+            timestamp:    new Date().toISOString(),
+          });
+          wss.clients.forEach(c => {
+            if (c.readyState === 1 && c.restaurantId === data.restaurantId) {
+              c.send(chatPayload);
+            }
+          });
+        }
+      }
+      
+      // Abonnement à un canal (existant)
       else if (data.type === 'subscribe') {
         console.log(`📢 Abonnement au canal: ${data.channel}`);
       }
       
-      // Désabonnement
+      // Désabonnement (existant)
       else if (data.type === 'unsubscribe') {
         console.log(`📢 Désabonnement du canal: ${data.channel}`);
       }
@@ -4236,6 +4414,11 @@ wss.on('connection', (ws) => {
       clients.delete(userId);
       console.log(`🔌 Client déconnecté: ${userId}`);
     }
+    // Nettoyer les watchers
+    watchedOrders.forEach(oid => {
+      orderWatchers.get(oid)?.delete(ws);
+      if (orderWatchers.get(oid)?.size === 0) orderWatchers.delete(oid);
+    });
   });
 
   ws.on('error', (error) => {
@@ -4270,6 +4453,52 @@ function broadcastToAll(data) {
 // Exporter les fonctions de broadcast
 global.broadcastToUser = broadcastToUser;
 global.broadcastToAll = broadcastToAll;
+
+// Broadcast d'une mise à jour de position livreur à tous les watchers d'une commande
+function broadcastOrderLocation(orderId, data) {
+  const watchers = orderWatchers.get(orderId);
+  if (!watchers) return 0;
+  let sent = 0;
+  const payload = JSON.stringify(data);
+  watchers.forEach(ws => {
+    if (ws.readyState === 1) { ws.send(payload); sent++; }
+  });
+  return sent;
+}
+global.broadcastOrderLocation = broadcastOrderLocation;
+
+// Broadcast d'une mise à jour de stock d'article
+function broadcastStockUpdate(restaurantId, itemId, stock) {
+  const payload = JSON.stringify({ type: 'stock_update', restaurantId, itemId, stock });
+  wss.clients.forEach(ws => {
+    if (ws.readyState === 1 && ws.restaurantId === restaurantId) {
+      ws.send(payload);
+    }
+  });
+}
+global.broadcastStockUpdate = broadcastStockUpdate;
+
+// ── Broadcast compteur de viewers en live ─────────────────────────────────
+function broadcastLiveViewerCount(restaurantId, viewerCount) {
+  const payload = JSON.stringify({ type: 'live_viewer_count', restaurantId, viewerCount });
+  wss.clients.forEach(ws => {
+    if (ws.readyState === 1 && ws.liveRestaurantId === restaurantId) {
+      ws.send(payload);
+    }
+  });
+}
+global.broadcastLiveViewerCount = broadcastLiveViewerCount;
+
+// ── Broadcast réaction live ───────────────────────────────────────────────
+function broadcastLiveReaction(restaurantId, reaction, reactions) {
+  const payload = JSON.stringify({ type: 'live_reaction', restaurantId, reaction, reactions });
+  wss.clients.forEach(ws => {
+    if (ws.readyState === 1 && ws.liveRestaurantId === restaurantId) {
+      ws.send(payload);
+    }
+  });
+}
+global.broadcastLiveReaction = broadcastLiveReaction;
 
 // ========================================
 // ROUTES DE COMMUNICATION (EMAIL & WHATSAPP)

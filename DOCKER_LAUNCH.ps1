@@ -56,8 +56,8 @@ if ($Logs) {
 
 # ── 1. Build de l'image backend ───────────────────────────────────────────────
 if (-not $NoBuild) {
-    Write-Host "[1/4] Build de l'image Docker backend..." -ForegroundColor Cyan
-    docker compose -f $ComposeFile build --no-cache backend
+    Write-Host "[1/4] Build des images Docker..." -ForegroundColor Cyan
+    docker compose -f $ComposeFile build --no-cache backend moderation-api chat-api food-recommend-api
     if ($LASTEXITCODE -ne 0) {
         Write-Host "ERREUR: Build echoue." -ForegroundColor Red
         Pop-Location; exit 1
@@ -75,7 +75,7 @@ Write-Host "      OK" -ForegroundColor DarkGray
 
 # ── 3. Demarrage ──────────────────────────────────────────────────────────────
 Write-Host ""
-Write-Host "[3/4] Demarrage backend + tunnel Cloudflare..." -ForegroundColor Cyan
+Write-Host "[3/4] Demarrage backend + tunnels (Cloudflare + ngrok)..." -ForegroundColor Cyan
 docker compose -f $ComposeFile up -d
 if ($LASTEXITCODE -ne 0) {
     Write-Host "ERREUR: Demarrage echoue." -ForegroundColor Red
@@ -83,46 +83,74 @@ if ($LASTEXITCODE -ne 0) {
 }
 Write-Host "      Conteneurs lances" -ForegroundColor Green
 
-# ── 4. Attente URL tunnel (max 90s) ───────────────────────────────────────────
+# ── 4. Attente URLs tunnels (max 90s) ─────────────────────────────────────────
 Write-Host ""
-Write-Host "[4/4] Attente URL tunnel Cloudflare (max 90s)..." -ForegroundColor Cyan
+Write-Host "[4/4] Attente URLs tunnels (max 90s)..." -ForegroundColor Cyan
 
 $timeout = 90
 $elapsed = 0
-$tunnelUrl = $null
+$cloudflareUrl = $null
+$ngrokUrl      = "https://macabrely-subsatirical-ayana.ngrok-free.dev"
 
 while ($elapsed -lt $timeout) {
     Start-Sleep -Seconds 3
     $elapsed += 3
 
-    $logs = docker logs center-tunnel 2>&1 | Out-String
-    $match = [regex]::Match($logs, 'https://[a-z0-9\-]+\.trycloudflare\.com')
-    if ($match.Success) {
-        $tunnelUrl = $match.Value
-        break
+    # Cherche URL cloudflare
+    if (-not $cloudflareUrl) {
+        $logs = docker logs center-tunnel-cf 2>&1 | Out-String
+        $match = [regex]::Match($logs, 'https://[a-z0-9\-]+\.trycloudflare\.com')
+        if ($match.Success) { $cloudflareUrl = $match.Value }
     }
+
+    if ($cloudflareUrl) { break }
     Write-Host "      ${elapsed}s - en attente..." -ForegroundColor DarkGray
 }
 
-if (-not $tunnelUrl) {
+# ── Mettre a jour tunnel-url.json et pousser sur GitHub ───────────────────────
+$tunnelJsonPath = "$BackendDir\tunnel-url.json"
+$now = (Get-Date).ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ")
+$cfUrl = if ($cloudflareUrl) { $cloudflareUrl } else { "" }
+
+$json = "{`n  `"ngrok`": `"$ngrokUrl`",`n  `"cloudflare`": `"$cfUrl`",`n  `"updated_at`": `"$now`"`n}`n"
+Set-Content $tunnelJsonPath -Value $json -Encoding UTF8 -NoNewline
+
+Write-Host "      tunnel-url.json mis a jour" -ForegroundColor Green
+
+# Push vers GitHub (urls accessibles publiquement via raw.githubusercontent.com)
+try {
+    Push-Location $BackendDir
+    git add tunnel-url.json 2>&1 | Out-Null
+    git commit -m "chore: update tunnel urls [$now]" 2>&1 | Out-Null
+    git push origin main 2>&1 | Out-Null
+    Write-Host "      tunnel-url.json pousse sur GitHub" -ForegroundColor Green
+} catch {
+    Write-Host "      AVERTISSEMENT: push GitHub echoue (URL toujours dans le fichier local)" -ForegroundColor Yellow
+}
+Pop-Location
+
+# ── Mettre a jour server_config.dart avec l'URL active ────────────────────────
+$tunnelUrl = if ($cloudflareUrl) { $cloudflareUrl } else { $ngrokUrl }
+
+if (-not $cloudflareUrl) {
     Write-Host ""
-    Write-Host "AVERTISSEMENT: URL tunnel non trouvee apres ${timeout}s" -ForegroundColor Yellow
-    Write-Host "  Consultez les logs : .\DOCKER_LAUNCH.ps1 -Logs" -ForegroundColor Gray
-    Write-Host "  Ou : docker logs center-tunnel" -ForegroundColor Gray
+    Write-Host "AVERTISSEMENT: URL cloudflare non trouvee apres ${timeout}s" -ForegroundColor Yellow
+    Write-Host "  ngrok sera utilise comme URL principale" -ForegroundColor Gray
 } else {
     Write-Host ""
-    Write-Host "      Tunnel actif : $tunnelUrl" -ForegroundColor Green
+    Write-Host "      Cloudflare : $cloudflareUrl" -ForegroundColor Green
+}
+Write-Host "      ngrok      : $ngrokUrl" -ForegroundColor Green
 
-    # Mettre a jour server_config.dart
-    if (Test-Path $ServerConfigPath) {
-        $content    = Get-Content $ServerConfigPath -Raw -Encoding UTF8
-        $newContent = $content -replace "(?<=productionUrl\s*=\s*`n?\s*')[^']+", $tunnelUrl
-        Set-Content $ServerConfigPath -Value $newContent -Encoding UTF8 -NoNewline
-        Write-Host "      server_config.dart mis a jour" -ForegroundColor Green
-    } else {
-        Write-Host "      AVERTISSEMENT: server_config.dart introuvable" -ForegroundColor Yellow
-        Write-Host "        Chemin attendu : $ServerConfigPath" -ForegroundColor Gray
-    }
+# Mettre a jour server_config.dart avec URL cloudflare (fallback prioritaire hotspot)
+if (Test-Path $ServerConfigPath) {
+    $content    = Get-Content $ServerConfigPath -Raw -Encoding UTF8
+    $newContent = $content -replace "(?<=productionUrl\s*=\s*`n?\s*')[^']+", $tunnelUrl
+    $newContent = $newContent -replace "(?<=cloudflareUrl\s*=\s*`n?\s*')[^']+", $cfUrl
+    Set-Content $ServerConfigPath -Value $newContent -Encoding UTF8 -NoNewline
+    Write-Host "      server_config.dart mis a jour" -ForegroundColor Green
+} else {
+    Write-Host "      AVERTISSEMENT: server_config.dart introuvable" -ForegroundColor Yellow
 }
 
 # ── Recapitulatif ─────────────────────────────────────────────────────────────
@@ -134,19 +162,16 @@ $localIP = (Get-NetIPAddress -AddressFamily IPv4 |
     Select-Object -First 1).IPAddress
 
 $health = docker inspect --format='{{.State.Health.Status}}' center-backend 2>$null
-Write-Host "  Backend : http://localhost:5000  (sante: $health)" -ForegroundColor White
+Write-Host "  Backend    : http://localhost:5000  (sante: $health)" -ForegroundColor White
 if ($localIP) {
-    Write-Host "  LAN     : http://${localIP}:5000" -ForegroundColor White
+    Write-Host "  LAN        : http://${localIP}:5000" -ForegroundColor White
 }
-if ($tunnelUrl) {
-    Write-Host "  Public  : $tunnelUrl" -ForegroundColor Green
-    Write-Host ""
-    Write-Host "  Flutter : server_config.dart = isProduction:true" -ForegroundColor Cyan
-    Write-Host "            URL -> $tunnelUrl" -ForegroundColor Cyan
-} else {
-    Write-Host "  Public  : (tunnel non disponible)" -ForegroundColor DarkGray
+Write-Host "  ngrok      : $ngrokUrl" -ForegroundColor Green
+if ($cloudflareUrl) {
+    Write-Host "  Cloudflare : $cloudflareUrl" -ForegroundColor Green
 }
-
+Write-Host ""
+Write-Host "  App Flutter: detecte auto ngrok (WiFi) ou Cloudflare (hotspot)" -ForegroundColor Cyan
 Write-Host ""
 Write-Host "  Commandes utiles :" -ForegroundColor Gray
 Write-Host "    .\DOCKER_LAUNCH.ps1 -Logs    -> logs en direct" -ForegroundColor Gray

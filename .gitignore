@@ -8,11 +8,18 @@ yarn-error.log*
 # PYTHON & IA - INCLURE LE CODE MAIS PAS LES MODÈLES
 # ============================================
 # Exclure seulement les modèles lourds, garder le code Python
-models/
+# ⚠️  NE PAS exclure models/ — contient les schemas Mongoose JS
 smolvlm_cache/
 mistral_models/
 stable_diffusion/
 tools/
+
+# ⚠️  CRITIQUE : dossiers volumineux — NE JAMAIS COMMITER
+environment/
+models--sentence-transformers*/
+models--*/
+../frontend-center/environment/
+../frontend-center/models--sentence-transformers*/
 
 # Fichiers modèles volumineux
 *.gguf
