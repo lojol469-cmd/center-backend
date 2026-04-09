@@ -42,6 +42,10 @@ pip-log.txt
 !food_recommend_api.py
 !requirements-recommend.txt
 
+# ── Exceptions pour Dockerfile.vlm ───────────────────────────────────────
+!vlm_api.py
+!requirements-vlm.txt
+
 # ========================================
 # DOSSIERS LOURDS - IA/ML (EXCLURE)
 # ========================================

@@ -17,6 +17,7 @@ const NodeMediaServer = require('node-media-server');
 // Use global fetch (Node 18+) — no node-fetch dependency required
 const { 
   uploadCloudinary, 
+  coverUpload,
   publicationUpload, 
   storyUpload, 
   commentUpload, 
@@ -358,6 +359,8 @@ const userSchema = new mongoose.Schema({
   password: { type: String, required: true },
   profileImage: { type: String, default: '' },
   cloudinaryPublicId: { type: String, default: '' }, // Pour supprimer l'image de Cloudinary
+  coverImage: { type: String, default: '' }, // Image de couverture
+  coverImagePublicId: { type: String, default: '' }, // Public ID couverture Cloudinary
   isVerified: { type: Boolean, default: false },
   status: { type: String, enum: ['active', 'blocked', 'admin'], default: 'active' },
   accessLevel: { type: Number, enum: [0, 1, 2], default: 0 }, // ✅ AJOUTÉ - Niveau d'accès (0: Basique, 1: Chat Utilisateurs, 2: Chat IA)
@@ -868,6 +871,7 @@ app.post('/api/auth/verify-otp', async (req, res) => {
       email: user.email, 
       name: user.name, 
       profileImage: user.profileImage, 
+      coverImage: user.coverImage,
       status: user.status 
     }
   });
@@ -2059,6 +2063,73 @@ app.delete('/api/user/delete-profile-image', verifyToken, async (req, res) => {
 app.delete('/api/user/delete-account', verifyToken, async (req, res) => {
   await User.findByIdAndDelete(req.user.userId);
   res.json({ message: 'Compte supprimé' });
+});
+
+// ========================================
+// COVER IMAGE (Image de couverture)
+// ========================================
+app.post('/api/user/upload-cover-image', verifyToken, coverUpload.single('coverImage'), async (req, res) => {
+  console.log('\n=== UPLOAD COVER IMAGE (Cloudinary) ===');
+  try {
+    const user = await User.findById(req.user.userId);
+    if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé' });
+    if (!req.file) return res.status(400).json({ message: 'Image requise' });
+
+    // Supprimer l'ancienne couverture si elle existe
+    if (user.coverImage && user.coverImagePublicId) {
+      try {
+        await deleteFromCloudinary(user.coverImagePublicId);
+      } catch (err) {
+        console.log('⚠️ Impossible de supprimer l\'ancienne couverture:', err.message);
+      }
+    }
+
+    user.coverImage = req.file.path;
+    user.coverImagePublicId = req.file.filename;
+    await user.save();
+
+    console.log('✅ Couverture mise à jour:', user.coverImage);
+    res.json({
+      message: 'Couverture mise à jour',
+      user: {
+        _id: user._id, name: user.name, email: user.email, status: user.status,
+        profileImage: user.profileImage, coverImage: user.coverImage, createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    console.error('❌ Erreur upload couverture:', err);
+    res.status(500).json({ message: 'Erreur serveur' });
+  }
+});
+
+app.delete('/api/user/delete-cover-image', verifyToken, async (req, res) => {
+  try {
+    const user = await User.findById(req.user.userId);
+    if (!user) return res.status(404).json({ message: 'Utilisateur non trouvé' });
+
+    if (user.coverImagePublicId) {
+      try {
+        await deleteFromCloudinary(user.coverImagePublicId);
+        console.log('✅ Couverture supprimée de Cloudinary:', user.coverImagePublicId);
+      } catch (err) {
+        console.log('⚠️ Erreur suppression couverture:', err.message);
+      }
+      user.coverImage = '';
+      user.coverImagePublicId = undefined;
+      await user.save();
+    }
+
+    res.json({
+      message: 'Couverture supprimée',
+      user: {
+        _id: user._id, name: user.name, email: user.email, status: user.status,
+        profileImage: user.profileImage, coverImage: '', createdAt: user.createdAt
+      }
+    });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ message: 'Erreur serveur' });
+  }
 });
 
 // ========================================
@@ -4178,6 +4249,16 @@ app.use('/api/virtual-id-cards', virtualIDCardRoutes);
 
 const creationRoutes = require('./routes/creation');
 app.use('/api/studio', creationRoutes);
+// Exposer les broadcasts WebSocket aux routes (set après wss init via setInterval trick)
+// Les fonctions globales sont définies plus bas après wss, mais les routes sont chargées ici.
+// On utilise app.locals comme pont pour les routes — les fonctions globales seront disponibles
+// au moment de l'exécution des requêtes (pas du chargement du module).
+app.locals.broadcastDelivery = (orderId, data) => {
+  if (global.broadcastDeliveryLocation) global.broadcastDeliveryLocation(orderId, data);
+};
+app.locals.broadcastLiveStarted = (followerIds, data) => {
+  if (global.broadcastLiveStartedToFollowers) global.broadcastLiveStartedToFollowers(followerIds, data);
+};
 
 const monetizationRoutes = require('./routes/monetization');
 app.use('/api/wallet', monetizationRoutes);
@@ -4379,20 +4460,86 @@ wss.on('connection', (ws) => {
             reason:  'Les numéros de téléphone, liens et contacts externes sont interdits dans le chat.',
           }));
         } else {
-          // Diffuser le message à tous les clients regardant ce restaurant
-          const chatPayload = JSON.stringify({
-            type:         'live_chat_message',
-            restaurantId: data.restaurantId,
-            userId:       userId || 'anonymous',
-            message:      raw.slice(0, 300),   // limite 300 chars
-            timestamp:    new Date().toISOString(),
+          // ── Modération Mistral asynchrone ──────────────────────────────
+          const VLM_URL = process.env.VLM_API_URL || 'http://localhost:8005';
+          const http_mod = require('http');
+          const mod_body = JSON.stringify({ text: raw, context: 'chat live business' });
+          const mod_req = http_mod.request(
+            { host: new URL(VLM_URL).hostname, port: new URL(VLM_URL).port || 8005,
+              path: '/analyze-content', method: 'POST',
+              headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(mod_body) },
+            },
+            (mod_res) => {
+              let body = '';
+              mod_res.on('data', chunk => body += chunk);
+              mod_res.on('end', () => {
+                try {
+                  const result = JSON.parse(body);
+                  if (result.safe === false) {
+                    ws.send(JSON.stringify({
+                      type: 'chat_blocked',
+                      reason: result.reason || 'Message inapproprié pour une plateforme professionnelle.',
+                    }));
+                    return;
+                  }
+                } catch (_) {}
+                // Message approuvé — diffuser
+                _broadcastChatMessage();
+              });
+            }
+          );
+          mod_req.on('error', () => _broadcastChatMessage()); // erreur VLM → laisser passer
+          mod_req.setTimeout(5000, () => { mod_req.destroy(); _broadcastChatMessage(); }); // timeout 5s
+          mod_req.write(mod_body);
+          mod_req.end();
+
+          function _broadcastChatMessage() {
+            const chatPayload = JSON.stringify({
+              type:         'live_chat_message',
+              restaurantId: data.restaurantId,
+              userId:       userId || 'anonymous',
+              message:      raw.slice(0, 300),
+              timestamp:    new Date().toISOString(),
+            });
+            wss.clients.forEach(c => {
+              if (c.readyState === 1 && c.restaurantId === data.restaurantId) {
+                c.send(chatPayload);
+              }
+            });
+          }
+        }
+      }
+
+      // ─── STUDIO LIVE CHAT (créateur et viewers de studio live) ──────────
+      else if (data.type === 'studio_live_chat' && data.liveId && data.message) {
+        const raw = String(data.message).trim().slice(0, 300);
+        const PHONE_RE2  = /(\+?\d[\d\s\-().]{6,}\d)/g;
+        const URL_RE2    = /https?:\/\/\S+/gi;
+        if (PHONE_RE2.test(raw) || URL_RE2.test(raw)) {
+          ws.send(JSON.stringify({ type: 'chat_blocked', reason: 'Contacts et liens interdits.' }));
+        } else {
+          const payload = JSON.stringify({
+            type: 'studio_live_chat_message',
+            liveId: data.liveId,
+            userId: userId || 'anonymous',
+            message: raw,
+            timestamp: new Date().toISOString(),
           });
           wss.clients.forEach(c => {
-            if (c.readyState === 1 && c.restaurantId === data.restaurantId) {
-              c.send(chatPayload);
-            }
+            if (c.readyState === 1 && c.studioLiveId === data.liveId) c.send(payload);
           });
         }
+      }
+
+      // ─── REJOINDRE STUDIO LIVE ───────────────────────────────────────────
+      else if (data.type === 'join_studio_live' && data.liveId) {
+        ws.studioLiveId = data.liveId;
+        ws.send(JSON.stringify({ type: 'joined_studio_live', liveId: data.liveId }));
+      }
+
+      // ─── QUITTER STUDIO LIVE ─────────────────────────────────────────────
+      else if (data.type === 'leave_studio_live') {
+        ws.studioLiveId = null;
       }
       
       // Abonnement à un canal (existant)
@@ -4499,6 +4646,26 @@ function broadcastLiveReaction(restaurantId, reaction, reactions) {
   });
 }
 global.broadcastLiveReaction = broadcastLiveReaction;
+
+// ── Broadcast position livreur (via orderWatchers, accessible depuis les routes) ─
+function broadcastDeliveryLocation(orderId, data) {
+  const watchers = orderWatchers.get(orderId);
+  if (!watchers) return;
+  const payload = JSON.stringify(data);
+  watchers.forEach(ws => { if (ws.readyState === 1) ws.send(payload); });
+}
+global.broadcastDeliveryLocation = broadcastDeliveryLocation;
+
+// ── Broadcast "live démarré" aux abonnés du créateur ─────────────────────
+function broadcastLiveStartedToFollowers(followerIds, data) {
+  if (!followerIds || !followerIds.length) return;
+  const payload = JSON.stringify(data);
+  followerIds.forEach(fId => {
+    const ws = clients.get(String(fId));
+    if (ws && ws.readyState === 1) ws.send(payload);
+  });
+}
+global.broadcastLiveStartedToFollowers = broadcastLiveStartedToFollowers;
 
 // ========================================
 // ROUTES DE COMMUNICATION (EMAIL & WHATSAPP)

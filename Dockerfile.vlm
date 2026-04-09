@@ -1,0 +1,72 @@
+# Dockerfile.vlm — SmolVLM-256M-Instruct VLM API v2.0
+# CUDA 12.8 (cu128) / NVIDIA — 4-bit NF4 GPU + fallback CPU float32
+# Inclut : SmolVLM (vision+texte) + MiniLM-L6-v2 (recommandations) + MongoDB
+# Port : 8005
+
+FROM nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
+
+LABEL maintainer="SETRAF Center"
+LABEL description="VLM API v2.0 — SmolVLM 4-bit + MiniLM — Vision, Chat, Captions, Recommandations (port 8005)"
+
+WORKDIR /app
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV PYTHONUNBUFFERED=1
+
+# ── Python 3.11 + dépendances système ─────────────────────────────────────
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.11 \
+    python3.11-dev \
+    python3-pip \
+    libgomp1 \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.11 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3 /usr/bin/python \
+    && python3 -m pip install --upgrade pip
+
+# ── PyTorch cu128 (CUDA 12.8) — couche cacheable séparément ──────────────
+# Utilise l'index cu128 pour éviter de télécharger CUDA bundlé (~900 MB)
+RUN pip install --no-cache-dir --timeout 300 \
+    torch==2.7.1+cu128 \
+    --index-url https://download.pytorch.org/whl/cu128 && \
+    pip install --no-cache-dir --timeout 300 --extra-index-url https://download.pytorch.org/whl/cu128 torchvision || \
+    pip install --no-cache-dir --timeout 300 torchvision
+
+# ── Dépendances Python VLM (SmolVLM + MiniLM + MongoDB) ──────────────────
+COPY requirements-vlm.txt .
+# --extra-index-url cu128 empêche pip de re-télécharger torch depuis PyPI
+RUN pip install --no-cache-dir --timeout 300 \
+    --extra-index-url https://download.pytorch.org/whl/cu128 \
+    -r requirements-vlm.txt
+
+# ── Code API + UnifiedAgent ───────────────────────────────────────────────
+COPY vlm_api.py .
+COPY models/ ./models/
+
+# ── Variables d'environnement ─────────────────────────────────────────────
+ENV VLM_PORT=8005
+# SmolVLM — yeux (modèle monté en bind-mount)
+ENV SMOLVLM_MODEL_PATH=/models/smolvlm
+# MiniLM — embeddings
+ENV MINILM_MODEL_PATH=/models/minilm
+# Mistral Kibali 7B — cerveau LLM (monté en bind-mount)
+ENV KIBALI_MODEL_PATH=/models/kibali
+# MongoDB — fourni par .env via docker-compose
+ENV MONGO_URI=mongodb://mongodb:27017/myDatabase60
+ENV MONGO_DB_NAME=myDatabase60
+
+# ── Répertoire temporaire uploads ─────────────────────────────────────────
+RUN mkdir -p /tmp/vlm_uploads
+
+VOLUME ["/models"]
+
+EXPOSE 8005
+
+HEALTHCHECK --interval=30s --timeout=15s --start-period=180s --retries=3 \
+    CMD python -c "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')" || exit 1
+
+CMD ["python", "-m", "uvicorn", "vlm_api:app", "--host", "0.0.0.0", "--port", "8005", "--log-level", "info"]

@@ -38,6 +38,8 @@ const verifyToken = (req, res, next) => {
 
     // Ajouter les informations de l'utilisateur à la requête
     req.user = decoded;
+    // Compatibilité : monetization.js et autres routes utilisent req.userId directement
+    req.userId = decoded.userId || decoded.id || decoded._id;
     next();
   } catch (error) {
     console.error('Erreur de vérification du token:', error.message);

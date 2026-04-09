@@ -1,0 +1,34 @@
+# VLM API — Python Dependencies
+# SmolVLM-256M-Instruct + MiniLM-L6-v2 (port 8005)
+# PyTorch cu128 est installé séparément dans le Dockerfile via --index-url
+# Ne PAS ajouter torch ici (doublon avec Dockerfile)
+# Contrainte: empêcher pip de mettre à jour torch depuis PyPI
+torch==2.6.0
+torchvision==0.21.0
+
+# ── Web Framework ──────────────────────────────────────────────────────────
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+python-multipart==0.0.20
+
+# ── Image Processing ────────────────────────────────────────────────────────
+Pillow==11.0.0
+
+# ── Transformers + SmolVLM (vision-language model) ──────────────────────────
+transformers>=4.45.0
+accelerate>=0.26.0
+safetensors>=0.4.3
+
+# ── Quantisation 4-bit NF4 (CUDA uniquement, stub CPU sinon) ─────────────
+bitsandbytes>=0.44.0
+
+# ── Embeddings + Recommandations (MiniLM-L6-v2) ─────────────────────────────
+sentence-transformers>=3.0.0
+scikit-learn>=1.3.0
+
+# ── MongoDB (recommandations + score algorithme) ─────────────────────────────
+pymongo>=4.6.0
+
+# ── Dépendances communes ────────────────────────────────────────────────────
+numpy>=1.24.0
+python-dotenv>=1.0.0

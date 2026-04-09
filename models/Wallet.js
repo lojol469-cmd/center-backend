@@ -19,6 +19,7 @@ const transactionSchema = new mongoose.Schema({
     enum: [
       'deposit', 'boost', 'earn_views', 'earn_likes', 'earn_tip', 'withdraw', 'bonus',
       'order_pay', 'order_earn', 'delivery_earn', 'subscription_pay', 'refund',
+      'video_unlock', 'video_earn', 'purchase', 'earn_replay',
     ],
     required: true,
   },

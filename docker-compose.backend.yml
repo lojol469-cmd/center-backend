@@ -25,6 +25,7 @@ services:
       - .env
     volumes:
       - uploads_data:/app/uploads
+      - rtmp_recordings:/recordings
     environment:
       - NODE_ENV=production
       # URLs des APIs Python
@@ -34,6 +35,8 @@ services:
       # Serveur RTMP (nginx-rtmp dans Docker)
       - RTMP_URL=rtmp://center-rtmp:1935/live
       - HLS_BASE_URL=http://center-rtmp:8080/hls
+      # VLM API — validation screenshots paiement + modération visuelle
+      - VLM_API_URL=http://vlm-api:8005
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:5000/api/server-info || exit 1"]
       interval: 20s
@@ -170,12 +173,16 @@ services:
     image: alfg/nginx-rtmp:latest
     container_name: center-rtmp
     restart: always
+    # Use entrypoint script to create/chown dirs then start nginx
+    command: ["sh", "/entrypoint.sh"]
     ports:
       - "1935:1935"   # RTMP  – émetteurs (OBS, encodeur, FFMPEG)
       - "8080:8080"   # HTTP  – segments HLS + stats
     volumes:
       - ./nginx-rtmp/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx-rtmp/entrypoint.sh:/entrypoint.sh:ro
       - rtmp_hls_data:/tmp/hls
+      - rtmp_recordings:/recordings
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health || exit 1"]
       interval: 20s
@@ -194,6 +201,94 @@ services:
       backend:
         condition: service_healthy
     command: tunnel --no-autoupdate --url http://backend:5000
+    networks:
+      - center-net
+
+  # ─── Topocoin Wallet API (FastAPI / Solana SPL Token) ────────────────────────
+  # Endpoints : /api/auth/register, /api/auth/login, /api/wallet/balance,
+  #             /api/wallet/send_sol, /api/wallet/send_tpc, /api/wallet/mint_tpc
+  topocoin-api:
+    build:
+      context: ../frontend-center/Topocoin-backend-api
+      dockerfile: Dockerfile
+    container_name: center-topocoin-api
+    image: center-backend-topocoin-api:latest
+    restart: always
+    ports:
+      - "8004:8004"
+    env_file:
+      - .env
+    environment:
+      - PORT=8004
+      - PYTHONUNBUFFERED=1
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8004/')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    networks:
+      - center-net
+
+  # ─── VLM API — SmolVLM-256M-Instruct 4-bit NF4 ────────────────────────────────
+  # Validation visuelle de screenshots de paiement Airtel Money
+  # VLM API v2.0 — SmolVLM 4-bit + MiniLM — Vision, Chat, Captions, Recommandations
+  # Endpoints : GET /, GET /health, POST /chat, POST /validate-payment, POST /analyze-content,
+  #             POST /describe-image, POST /video/caption, POST /video/auto-tags, POST /video/title,
+  #             POST /video/description, POST /video/thumbnail-score, POST /video/moderation,
+  #             GET /recommend/feed, POST /recommend/similar, POST /recommend/score
+  vlm-api:
+    build:
+      context: .
+      dockerfile: Dockerfile.vlm
+    container_name: center-vlm-api
+    restart: always
+    ports:
+      - "8005:8005"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+      - VLM_PORT=8005
+      # SmolVLM — yeux (vision)
+      - SMOLVLM_MODEL_PATH=/models/smolvlm
+      # MiniLM — embeddings recommandations
+      - MINILM_MODEL_PATH=/models/minilm
+      # Mistral Kibali 7B — cerveau (raisonnement + modération)
+      - KIBALI_MODEL_PATH=/models/kibali
+      # MongoDB — pour l'index vidéo et les recommandations
+      - MONGO_URI=${MONGO_URI:-mongodb://host.docker.internal:27017/myDatabase60}
+      - MONGO_DB_NAME=${MONGO_DB_NAME:-myDatabase60}
+    volumes:
+      # SmolVLM-256M-Instruct — modèle local en lecture seule
+      - type: bind
+        source: ../frontend-center/models--HuggingFaceTB--SmolVLM-256M-Instruct
+        target: /models/smolvlm
+        read_only: true
+      # MiniLM-L6-v2 — modèle local en lecture seule (embeddings + recommandations)
+      - type: bind
+        source: ../frontend-center/models--sentence-transformers--all-MiniLM-L6-v2
+        target: /models/minilm
+        read_only: true
+      # Mistral Kibali 7B — cerveau LLM local (raisonnement + modération)
+      - type: bind
+        source: ./kibali-final-merged
+        target: /models/kibali
+        read_only: true
+    # GPU NVIDIA (CUDA 12.8) — nécessite nvidia-container-toolkit
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8005/health')"]
+      interval: 30s
+      timeout: 15s
+      retries: 3
+      start_period: 180s
     networks:
       - center-net
 
@@ -217,6 +312,8 @@ volumes:
   chat_models_cache:
   chat_faiss_storage:
   rtmp_hls_data:
+  rtmp_recordings:
+  vlm_tmp_uploads:
 
 networks:
   center-net:

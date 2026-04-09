@@ -3,6 +3,83 @@ const router = express.Router();
 const { verifyToken } = require('../middleware/auth');
 const { Wallet, Transaction, BoostPlan } = require('../models/Wallet');
 const { Video } = require('../models/Video');
+const { cloudinary } = require('../cloudynary');
+const { CloudinaryStorage } = require('multer-storage-cloudinary');
+const multer = require('multer');
+const nodemailer = require('nodemailer');
+const axios = require('axios');
+const FormData = require('form-data');
+
+// ── Cloudinary storage pour les preuves de paiement Airtel Money ──────────
+const proofStorage = new CloudinaryStorage({
+  cloudinary,
+  params: {
+    folder: 'center-app/payment-proofs',
+    allowed_formats: ['jpg', 'jpeg', 'png', 'webp'],
+    transformation: [{ quality: 'auto:good' }],
+    public_id: (_req, _file) =>
+      `proof-${Date.now()}-${Math.round(Math.random() * 1e9)}`,
+  },
+});
+const uploadProof = multer({
+  storage: proofStorage,
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) => {
+    const ok = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Seules les images sont acceptées (jpg/png/webp)'));
+  },
+});
+
+// ── Memory storage multer — buffer disponible avant upload Cloudinary ───
+const proofMemory = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 10 * 1024 * 1024 }, // 10 MB
+  fileFilter: (_req, file, cb) => {
+    const ok = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp'];
+    if (ok.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Seules les images sont acceptées (jpg/png/webp)'));
+  },
+});
+
+// ── VLM API — validation visuelle screenshots paiement ────────────────────
+const VLM_API_URL = process.env.VLM_API_URL || 'http://vlm-api:8005';
+
+async function uploadBufferToCloudinary(buffer, mimetype) {
+  const dataUri = `data:${mimetype};base64,${buffer.toString('base64')}`;
+  const result = await cloudinary.uploader.upload(dataUri, {
+    folder: 'center-app/payment-proofs',
+    resource_type: 'image',
+    public_id: `proof-${Date.now()}-${Math.round(Math.random() * 1e9)}`,
+  });
+  return result.secure_url;
+}
+
+async function callVlmValidation(buffer, mimetype, pack) {
+  try {
+    const form = new FormData();
+    form.append('image', buffer, { filename: 'screenshot.jpg', contentType: mimetype });
+    form.append('expected_amount', String(pack.price_xaf));
+    form.append('payment_number', '076356144'); // numéro Airtel Money CENTER
+    form.append('pack_label', pack.label);
+    const { data } = await axios.post(`${VLM_API_URL}/validate-payment`, form, {
+      headers: form.getHeaders(),
+      timeout: 30_000, // timeout 30 s
+    });
+    return data; // { valid, amount_detected, confidence, reason, ... }
+  } catch (err) {
+    console.warn('[VLM] Service injoignable:', err.message);
+    return null; // null = dégradation gracieuse
+  }
+}
+
+// ── Mailer Gmail ─────────────────────────────────────────────────────────
+function createMailer() {
+  return nodemailer.createTransport({
+    service: 'gmail',
+    auth: { user: process.env.EMAIL_USER, pass: process.env.EMAIL_PASS },
+  });
+}
 
 // Plans de boost par défaut
 const DEFAULT_PLANS = [
@@ -87,6 +164,192 @@ router.post('/deposit', verifyToken, async (req, res) => {
     res.status(500).json({ success: false, message: err.message });
   }
 });
+
+// POST /api/wallet/deposit-with-proof — Dépôt Airtel Money avec validation VLM
+// Flux :
+//   1. Réception screenshot (mémoire)
+//   2. Appel VLM /validate-payment → analyse automatique
+//   3a. VLM valide (confidence ≥ 0.65) → crédit immédiat + email admin « Approuvé »
+//   3b. VLM invalide                   → en attente + email admin « Revue manuelle »
+//   3c. VLM injoignable               → crédit immédiat (dégradation gracieuse) + email admin
+router.post(
+  '/deposit-with-proof',
+  verifyToken,
+  proofMemory.single('screenshot'), // buffer en mémoire, pas encore sur Cloudinary
+  async (req, res) => {
+    try {
+      const { pack_id } = req.body;
+      const pack = TOPOCOIN_PACKS.find(p => p.id === pack_id);
+      if (!pack)
+        return res.status(400).json({ success: false, message: 'Pack invalide' });
+      if (!req.file)
+        return res
+          .status(400)
+          .json({ success: false, message: "Capture d'écran de transaction requise" });
+
+      const { buffer, mimetype } = req.file;
+
+      // ── 1. Validation visuelle par SmolVLM ───────────────────────────
+      const vlmResult = await callVlmValidation(buffer, mimetype, pack);
+      const MIN_CONFIDENCE = 0.65;
+
+      let vlmApproved = false;
+      let vlmReason   = 'Service VLM indisponible — crédit de secours accordé';
+      let vlmConfidence = null;
+
+      if (vlmResult) {
+        vlmApproved   = vlmResult.valid === true && (vlmResult.confidence ?? 0) >= MIN_CONFIDENCE;
+        vlmReason     = vlmResult.reason || '';
+        vlmConfidence = vlmResult.confidence ?? null;
+        console.log(`[VLM] valid=${vlmResult.valid} confidence=${vlmResult.confidence} reason=${vlmReason}`);
+      } else {
+        // VLM injoignable → dégradation gracieuse : crédit accordé
+        vlmApproved = true;
+      }
+
+      // ── 2. Upload Cloudinary (toujours, pour archivage) ───────────────
+      let screenshotUrl = null;
+      try {
+        screenshotUrl = await uploadBufferToCloudinary(buffer, mimetype);
+      } catch (uploadErr) {
+        console.error('[Cloudinary] Échec upload preuve:', uploadErr.message);
+      }
+
+      // ── 3a. VLM approuve → créditer immédiatement ────────────────────
+      if (vlmApproved) {
+        const wallet = await ensureWallet(req.userId);
+        wallet.balance         += pack.amount;
+        wallet.total_deposited += pack.amount;
+        wallet.updatedAt        = new Date();
+        await wallet.save();
+
+        await Transaction.create({
+          user:         req.userId,
+          type:         'deposit',
+          amount:       pack.amount,
+          balance_after: wallet.balance,
+          description:  `💳 Recharge ${pack.label} (${pack.price_xaf} XAF) via Airtel Money`,
+          ref_id:       pack_id,
+          ref_type:     'pack',
+          meta: {
+            screenshot_url: screenshotUrl,
+            vlm_valid:       vlmResult ? true : null,
+            vlm_confidence:  vlmConfidence,
+            vlm_reason:      vlmReason,
+          },
+        });
+
+        // Email admin — confirmé
+        const vlmTag = vlmResult
+          ? `<span style="color:#2e7d32">✅ Approuvé par SmolVLM (confiance : ${Math.round((vlmConfidence || 0) * 100)}%)</span>`
+          : `<span style="color:#e65100">⚠️ VLM indisponible — crédit de secours accordé</span>`;
+
+        try {
+          await createMailer().sendMail({
+            from: `"SETRAF Center" <${process.env.EMAIL_USER}>`,
+            to:   'nyundumathryme@gmail.com',
+            subject: `✅ Dépôt VALIDÉ — ${pack.label} (${pack.price_xaf} XAF)`,
+            html: `
+              <div style="font-family:Arial,sans-serif;max-width:540px;margin:auto;border:1px solid #c8e6c9;border-radius:12px;overflow:hidden;">
+                <div style="background:linear-gradient(135deg,#2e7d32,#43a047);padding:20px;">
+                  <h2 style="color:#fff;margin:0;">✅ Paiement validé automatiquement</h2>
+                </div>
+                <div style="padding:20px;">
+                  <p>${vlmTag}</p>
+                  <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                    <tr><td style="color:#666;padding:5px 0;">Pack</td><td style="font-weight:bold;">${pack.label}</td></tr>
+                    <tr><td style="color:#666;padding:5px 0;">Montant XAF</td><td><strong>${pack.price_xaf} XAF</strong></td></tr>
+                    <tr><td style="color:#666;padding:5px 0;">TPC crédités</td><td style="color:#2e7d32;font-weight:bold;">${pack.amount} TPC</td></tr>
+                    <tr><td style="color:#666;padding:5px 0;">Utilisateur</td><td>${req.userId}</td></tr>
+                    <tr><td style="color:#666;padding:5px 0;">Analyse VLM</td><td><em>${vlmReason}</em></td></tr>
+                    <tr><td style="color:#666;padding:5px 0;">Date</td><td>${new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Brazzaville' })}</td></tr>
+                  </table>
+                  ${screenshotUrl ? `<p style="margin-top:12px;font-size:13px;color:#666;">Capture :</p><img src="${screenshotUrl}" style="max-width:100%;border-radius:8px;"/>` : ''}
+                </div>
+              </div>`,
+          });
+        } catch (e) {
+          console.warn('[Mailer] Échec email admin:', e.message);
+        }
+
+        return res.json({
+          success:         true,
+          balance:         wallet.balance,
+          credited:        pack.amount,
+          pack,
+          screenshot_url:  screenshotUrl,
+          vlm_validated:   !!vlmResult,
+          vlm_confidence:  vlmConfidence,
+          message:         `✅ ${pack.label} crédités ! Paiement ${vlmResult ? 'validé par VLM' : 'accepté (VLM indisponible)'}`,
+        });
+      }
+
+      // ── 3b. VLM rejette → transaction en attente ──────────────────────
+      await Transaction.create({
+        user:         req.userId,
+        type:         'deposit_pending',
+        amount:       pack.amount,
+        balance_after: (await ensureWallet(req.userId)).balance,
+        description:  `⏳ En attente — ${pack.label} (${pack.price_xaf} XAF) — Rejeté VLM`,
+        ref_id:       pack_id,
+        ref_type:     'pack',
+        meta: {
+          screenshot_url: screenshotUrl,
+          vlm_valid:       false,
+          vlm_confidence:  vlmConfidence,
+          vlm_reason:      vlmReason,
+          amount_detected: vlmResult?.amount_detected,
+          recipient_number: vlmResult?.recipient_number,
+        },
+      });
+
+      // Email admin — revue manuelle requise
+      try {
+        await createMailer().sendMail({
+          from: `"SETRAF Center" <${process.env.EMAIL_USER}>`,
+          to:   'nyundumathryme@gmail.com',
+          subject: `⚠️ Dépôt EN ATTENTE — ${pack.label} (${pack.price_xaf} XAF) — Revue manuelle`,
+          html: `
+            <div style="font-family:Arial,sans-serif;max-width:540px;margin:auto;border:1px solid #ffe0b2;border-radius:12px;overflow:hidden;">
+              <div style="background:linear-gradient(135deg,#e65100,#ff9800);padding:20px;">
+                <h2 style="color:#fff;margin:0;">⚠️ Paiement rejeté par VLM — Revue manuelle</h2>
+              </div>
+              <div style="padding:20px;">
+                <p style="color:#c62828;">SmolVLM n'a pas pu confirmer ce paiement. Les TPC <strong>n'ont PAS été crédités</strong>.</p>
+                <table style="width:100%;border-collapse:collapse;font-size:14px;">
+                  <tr><td style="color:#666;padding:5px 0;">Pack</td><td>${pack.label}</td></tr>
+                  <tr><td style="color:#666;padding:5px 0;">Montant XAF</td><td>${pack.price_xaf} XAF</td></tr>
+                  <tr><td style="color:#666;padding:5px 0;">Utilisateur</td><td>${req.userId}</td></tr>
+                  <tr><td style="color:#666;padding:5px 0;">Raison VLM</td><td style="color:#c62828;"><em>${vlmReason}</em></td></tr>
+                  <tr><td style="color:#666;padding:5px 0;">Confiance VLM</td><td>${vlmConfidence !== null ? Math.round(vlmConfidence * 100) + '%' : 'N/A'}</td></tr>
+                  <tr><td style="color:#666;padding:5px 0;">Montant détecté</td><td>${vlmResult?.amount_detected || '?'}</td></tr>
+                  <tr><td style="color:#666;padding:5px 0;">Date</td><td>${new Date().toLocaleString('fr-FR', { timeZone: 'Africa/Brazzaville' })}</td></tr>
+                </table>
+                ${screenshotUrl ? `<p style="margin-top:12px;font-size:13px;">Capture :</p><img src="${screenshotUrl}" style="max-width:100%;border-radius:8px;"/>` : ''}
+                <p style="margin-top:16px;font-size:12px;color:#aaa;">Vérifiez la capture et créditez manuellement si le paiement est légitime.</p>
+              </div>
+            </div>`,
+        });
+      } catch (e) {
+        console.warn('[Mailer] Échec email admin:', e.message);
+      }
+
+      // Retour 402 Payment Required
+      return res.status(402).json({
+        success:         false,
+        pending:         true,
+        screenshot_url:  screenshotUrl,
+        vlm_reason:      vlmReason,
+        vlm_confidence:  vlmConfidence,
+        message:         `⏳ Paiement en attente de validation manuelle. Raison : ${vlmReason}`,
+      });
+
+    } catch (err) {
+      console.error('[deposit-with-proof]', err);
+      res.status(500).json({ success: false, message: err.message });
+    }
+  },
+);
 
 // GET /api/wallet/packs — liste des packs disponibles
 router.get('/packs', async (req, res) => {

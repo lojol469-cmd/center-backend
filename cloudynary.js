@@ -43,6 +43,38 @@ const uploadCloudinary = multer({
 });
 
 // ========================================
+// CONFIGURATION POUR IMAGES DE COUVERTURE
+// ========================================
+const coverStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: 'center-app/covers',
+        allowed_formats: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'],
+        transformation: [{ width: 1200, height: 600, crop: 'limit' }],
+        public_id: (req, file) => {
+            const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1E9);
+            return 'cover-' + uniqueSuffix;
+        }
+    }
+});
+
+const coverUpload = multer({
+    storage: coverStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        const allowedMimes = [
+            'image/jpeg', 'image/jpg', 'image/png', 'image/gif',
+            'image/webp', 'image/bmp'
+        ];
+        if (allowedMimes.includes(file.mimetype)) {
+            cb(null, true);
+        } else {
+            cb(new Error('Format image non supporté'), false);
+        }
+    }
+});
+
+// ========================================
 // CONFIGURATION POUR PUBLICATIONS (Images + Vidéos)
 // ========================================
 const publicationStorage = new CloudinaryStorage({
@@ -347,6 +379,7 @@ const getTransformedUrl = (publicId, transformations = {}) => {
 module.exports = {
     cloudinary,
     uploadCloudinary,
+    coverUpload,
     publicationUpload,
     storyUpload,
     commentUpload,
